@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import re
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
+from matplotlib.transforms import blended_transform_factory
 
 from luxplate.kinetics import run_kinetics
+from luxplate.statistics import paired_nonparametric_tests
 
 
 PUBLICATION_COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000")
@@ -31,6 +36,16 @@ def _display_strain(value: object) -> str:
     return strain
 
 
+def _display_panel(value: object) -> str:
+    """Turn machine-oriented group identifiers into publication labels."""
+    label = str(value).strip()
+    match = re.fullmatch(r"exp(?:eriment)?\s*(\d+)\s*\|\s*([^()]+)(?:\s*\([^)]*\))?", label,
+                         flags=re.IGNORECASE)
+    if match:
+        return f"Experiment {match.group(1)} – {match.group(2).strip()}"
+    return label.replace("|", " – ")
+
+
 def _strain_colors(data: pd.DataFrame) -> dict[str, str]:
     """Assign each strain one deterministic color for every panel in a figure."""
     strains = list(dict.fromkeys(data["souche"].dropna().astype(str)))
@@ -40,11 +55,7 @@ def _strain_colors(data: pd.DataFrame) -> dict[str, str]:
 
 def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "Groupe",
                             title: str | None = None, y_scale: str = "linear"):
-    """Make one polished mean ± SD time-course panel per medium or strain.
-
-    Fine lines retain the technical-series information used throughout the example
-    scripts; the heavy line and translucent ribbon show mean and standard deviation.
-    """
+    """Make one publication-style mean ± SD time-course panel per group."""
     required = {"temps_h", "souche", "sample_header", value, group_by}
     missing = required.difference(data.columns)
     if missing:
@@ -72,15 +83,12 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         for strain in strains:
             color = strain_colors[strain]
             strain_data = subset.loc[subset["souche"].astype(str).eq(strain)]
-            for _, curve in strain_data.groupby("sample_header", sort=False):
-                curve = curve.sort_values("temps_h")
-                axis.plot(curve["temps_h"], curve[value], color=color, lw=0.7, alpha=0.20)
             summary = strain_data.groupby("temps_h", as_index=False)[value].agg(["mean", "std"]).reset_index()
             x = summary["temps_h"].to_numpy(float); y = summary["mean"].to_numpy(float)
             sd = summary["std"].fillna(0).to_numpy(float)
-            axis.fill_between(x, y - sd, y + sd, color=color, alpha=0.14, linewidth=0)
-            axis.plot(x, y, color=color, lw=2, label=strain)
-        axis.set(title=panel, xlabel="Time (h)", ylabel=ylabel)
+            axis.errorbar(x, y, yerr=sd, color=color, lw=1.6, capsize=2,
+                          marker="o", markersize=2.5, label=strain)
+        axis.set(title=_display_panel(panel), xlabel="Time (h)", ylabel=ylabel)
         axis.set_yscale(y_scale)
         axis.title.set_fontweight("bold"); axis.title.set_ha("left"); axis.title.set_position((0, 1.0))
         _publication_style(axis)
@@ -88,12 +96,10 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         axis.remove()
     handles, labels = axes.flat[0].get_legend_handles_labels()
     if handles:
-        figure.legend(handles, [_display_strain(label) for label in labels], title="Strain",
+        figure.legend(handles, [_display_strain(label) for label in labels], title="Reporter",
                       frameon=False, loc="upper center",
                       bbox_to_anchor=(0.5, 0.93), ncol=min(5, len(labels)))
     figure.suptitle(title or f"{ylabel} over time", fontsize=13, fontweight="bold", y=0.995)
-    figure.text(0.5, 0.955, "Thin lines: technical wells; thick line and ribbon: mean ± SD",
-                ha="center", color="#555555", fontsize=8)
     # Identical limits prevent misleading visual comparisons between replicate panels.
     visible_axes = list(axes.flat[:len(panels)])
     if visible_axes:
@@ -101,7 +107,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         shared_limits = (float(np.nanmin(limits[:, 0])), float(np.nanmax(limits[:, 1])))
         for axis in visible_axes:
             axis.set_ylim(shared_limits)
-    figure.subplots_adjust(top=0.82, bottom=0.12, hspace=0.48, wspace=0.34)
+    figure.subplots_adjust(top=0.84, bottom=0.12, hspace=0.48, wspace=0.34)
     return figure
 
 
@@ -159,7 +165,7 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
                 bottom.errorbar(lx[valid], ly[valid], yerr=lsd[valid], color=color, lw=1.25,
                     marker="s", markersize=2.3, markerfacecolor="white", capsize=2)
             if panel_index == 0: legend_handles.append(od_line)
-        top.set(title=medium, ylabel=r"Blank-corrected OD$_{600}$")
+        top.set(title=_display_panel(medium), ylabel=r"Blank-corrected OD$_{600}$")
         bottom.set(xlabel="Time (h)", ylabel=r"Normalized luminescence (RLU/OD$_{600}$)")
         bottom.set_yscale(lum_scale); top.tick_params(labelbottom=False)
         top.title.set_fontweight("bold"); top.title.set_ha("left"); top.title.set_position((0, 1))
@@ -167,7 +173,7 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
     for panel_index in range(len(panels), blocks * ncols):
         block, column = divmod(panel_index, ncols)
         axes[2 * block, column].remove(); axes[2 * block + 1, column].remove()
-    figure.legend(legend_handles, [_display_strain(line.get_label()) for line in legend_handles], title="Strain",
+    figure.legend(legend_handles, [_display_strain(line.get_label()) for line in legend_handles], title="Reporter",
                   frameon=False, loc="upper center", bbox_to_anchor=(.5, .945),
                   ncol=min(5, len(legend_handles)))
     figure.suptitle(title or "Growth and normalized luminescence", fontweight="bold", y=.995)
@@ -177,7 +183,7 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
 
 def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "linear",
                        title: str | None = None):
-    """Plot technical-replicate means as paired independent experiments."""
+    """Plot mean ± biological SD, technical wells, and biological means."""
     required = {"souche", "Groupe", metric}
     missing = required.difference(metrics.columns)
     if missing: raise ValueError(f"Missing columns for metric: {sorted(missing)}")
@@ -213,11 +219,29 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         if column in work and work[column].notna().any()
     ]
     group_columns = ["souche", "Groupe", *biological_columns]
+    technical = work.copy()
     work = work.groupby(group_columns, dropna=False, sort=False)[metric].mean().reset_index()
     biological_columns = biological_columns or ["Groupe"]
     figure, axis = plt.subplots(figsize=(max(6, 1.15 * len(strains)), 4.5))
     rng = np.random.default_rng(1947)
-    markers = ("o", "s", "^", "D", "v", "P", "X")
+    colors = _strain_colors(work)
+    summaries = work.groupby("souche", sort=False)[metric].agg(["mean", "std"])
+    for strain_index, strain in enumerate(strains):
+        if strain not in summaries.index:
+            continue
+        row = summaries.loc[strain]
+        axis.bar(strain_index, row["mean"], width=.62, color=colors[strain], alpha=.28,
+                 edgecolor=colors[strain], linewidth=1, zorder=1)
+        error = 0 if pd.isna(row["std"]) else row["std"]
+        axis.plot([strain_index, strain_index], [row["mean"] - error, row["mean"] + error],
+                  color=colors[strain], lw=1.3, zorder=4)
+        axis.plot([strain_index - .05, strain_index + .05], [row["mean"] - error] * 2,
+                  color=colors[strain], lw=1.3, zorder=4)
+        axis.plot([strain_index - .05, strain_index + .05], [row["mean"] + error] * 2,
+                  color=colors[strain], lw=1.3, zorder=4)
+        raw = technical.loc[technical["souche"].astype(str).eq(strain), metric].to_numpy(float)
+        axis.plot(strain_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
+                  marker="o", markersize=2.8, color=colors[strain], alpha=.32, zorder=2)
     identities = list(work[biological_columns].drop_duplicates().itertuples(index=False, name=None))
     for identity_index, identity in enumerate(identities):
         mask = np.ones(len(work), dtype=bool)
@@ -233,19 +257,44 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
             if len(values):
                 x = strain_index + rng.uniform(-.025, .025)
                 xs.append(x); ys.append(values[0])
-                axis.scatter(x, values[0], s=40, marker=markers[identity_index % len(markers)],
-                    color=PUBLICATION_COLORS[strain_index % len(PUBLICATION_COLORS)],
+                axis.scatter(x, values[0], s=48, marker="o",
+                    color=colors[strain],
                     edgecolor="white", linewidth=.6, zorder=3,
                     label=" | ".join(map(str, identity)) if strain_index == 0 else None)
-        axis.plot(xs, ys, color="#888888", alpha=.45, lw=.8, zorder=1)
     metric_labels = {"lum_norm_peak": r"Peak normalized luminescence (RLU/OD$_{600}$)",
         "lum_norm_auc": r"Normalized luminescence AUC (RLU/OD$_{600}$)·h",
         "doubling_time_h": "Doubling time (h)"}
     axis.set_xticks(range(len(strains)), [_display_strain(s) for s in strains])
-    axis.set(xlabel="Strain", ylabel=metric_labels.get(metric, metric), title=title or metric_labels.get(metric, metric))
+    axis.set(xlabel="Reporter", ylabel=metric_labels.get(metric, metric), title=title or metric_labels.get(metric, metric))
     axis.set_yscale(effective_scale)
     axis.title.set_fontweight("bold"); _publication_style(axis)
-    if identities: axis.legend(title="Independent experiment", frameon=False, loc="best", fontsize="small")
+    omnibus, comparisons = paired_nonparametric_tests(work, value=metric)
+    strain_positions = {strain: index for index, strain in enumerate(strains)}
+    usable = comparisons.loc[
+        comparisons["condition_1"].isin(strain_positions)
+        & comparisons["condition_2"].isin(strain_positions)
+    ]
+    transform = blended_transform_factory(axis.transData, axis.transAxes)
+    for level, comparison in enumerate(usable.itertuples(index=False), start=1):
+        left = strain_positions[comparison.condition_1]
+        right = strain_positions[comparison.condition_2]
+        y = .82 + .055 * level
+        p = comparison.p_holm
+        stars = "****" if p < .0001 else "***" if p < .001 else "**" if p < .01 else "*" if p < .05 else "ns"
+        axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
+                  transform=transform, color="#333333", lw=.7, clip_on=False)
+        axis.text((left + right) / 2, y + .006, stars, transform=transform,
+                  ha="center", va="bottom", fontsize=7)
+    axis.text(.99, .01, "Friedman: " + (f"p = {omnibus:.3g}" if np.isfinite(omnibus) else "not estimable"),
+              transform=axis.transAxes, ha="right", va="bottom", fontsize=7, color="#555555")
+    axis.legend(handles=[
+        Line2D([], [], marker="o", linestyle="none", markersize=4, alpha=.35,
+               color="#555555", label="Technical replicate"),
+        Line2D([], [], marker="o", linestyle="none", markersize=7,
+               color="#555555", markeredgecolor="white", label="Biological mean"),
+    ], title="Replicate display", frameon=False, fontsize=7, loc="center left",
+       bbox_to_anchor=(1.01, .5))
+    figure._luxplate_statistics = comparisons
     figure.tight_layout(); return figure
 
 
@@ -267,7 +316,7 @@ def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
     return figures
 
 
-def build_publication_figures(data: pd.DataFrame, *, title: str = "LuxPlate analysis",
+def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     families: tuple[str, ...] = ("growth", "normalized", "mixed", "peak", "auc", "doubling"),
     panel_by: str = "Groupe", lum_scale: str = "linear", normalized_scale: str = "linear",
     metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux") -> list[tuple[str, object]]:
@@ -281,11 +330,11 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "LuxPlate anal
     for family, value, suffix, scale, figure_label in choices:
         if family in families and value in data and data[value].notna().any():
             figures.append((suffix, plot_publication_panels(data, value=value, group_by=panel_by,
-                y_scale=scale, title=f"{title} — {figure_label}")))
+                y_scale=scale, title=figure_label)))
     if "mixed" in families:
         figures.append(("croissance_luminescence_mixte", plot_mixed_panels(
             data, lum_scale=lum_scale, uncertainty=uncertainty,
-            title=f"{title} — growth and normalized luminescence")))
+            title="Growth and normalized luminescence")))
     metric_families = {"peak": ("lum_norm_peak", "pic_luminescence_normalisee", "Peak normalized luminescence"),
                        "auc": ("lum_norm_auc", "auc_luminescence_normalisee", "Normalized luminescence AUC"),
                        "doubling": ("doubling_time_h", "temps_doublement", "Doubling time")}
@@ -297,10 +346,10 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "LuxPlate anal
                 metric, suffix, figure_label = metric_families[family]
                 scale = "linear" if family == "doubling" else metric_scale
                 figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
-                    title=f"{title} — {figure_label}")))
+                    title=figure_label)))
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
-            uncertainty=uncertainty, title=f"{title} — targeted control comparison"))
+            uncertainty=uncertainty, title="Targeted control comparison"))
     return figures
 
 

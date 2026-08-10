@@ -189,6 +189,14 @@ with guided_tab:
                             for guided_name, guided_figure in guided_figures:
                                 st.subheader(guided_name.replace("_", " ").title())
                                 st.pyplot(guided_figure, use_container_width=True)
+                            st.caption(
+                                "Kinetic curves show mean ± SD across technical wells. Normalized "
+                                "luminescence is blank-corrected RLU divided by blank-corrected OD600. "
+                                "Summary bars show the mean ± SD of independent biological experiments; "
+                                "small points are technical replicates and large points are biological means. "
+                                "Statistics use biological means only (Friedman test with paired Wilcoxon "
+                                "tests and Holm correction)."
+                            )
                     base = guided_uploads[0].name.rsplit(".", 1)[0] if len(guided_uploads) == 1 else "analyse_multi_fichiers"
                     exports = st.columns(3)
                     exports[0].download_button("Données finales", complete.normalization.normalized_data.to_csv(
@@ -499,9 +507,6 @@ with figures_tab:
     if "normalization_result" not in st.session_state:
         st.info("Exécutez d'abord la normalisation dans l'onglet 4.")
     else:
-        figure_title = st.text_input(
-            "Titre commun des figures", value=st.session_state.get("source_name", "Analyse LuxPlate")
-        )
         family_labels = {
             "Croissance corrigée": "growth", "Luminescence corrigée": "corrected",
             "Luminescence normalisée": "normalized", "Double axe DO + luminescence": "mixed",
@@ -531,7 +536,7 @@ with figures_tab:
             else:
                 with st.spinner("Création des figures haute résolution…"):
                     figures = build_publication_figures(
-                        st.session_state["normalization_result"].normalized_data, title=figure_title,
+                        st.session_state["normalization_result"].normalized_data,
                         families=tuple(family_labels[label] for label in selected_labels),
                         panel_by="Groupe" if panel_label.endswith("milieu") else "souche",
                         lum_scale="log" if lum_label == "Logarithmique" else "linear",
@@ -551,6 +556,12 @@ with figures_tab:
             for (name, figure), item in zip(figures, rendered):
                 st.subheader(name.replace("_", " ").title())
                 st.pyplot(figure, use_container_width=True)
+                st.caption(
+                    "Curves: mean ± SD across technical wells. Normalized luminescence = blank-corrected "
+                    "RLU / blank-corrected OD600. Summary plots: bars are biological mean ± SD; small "
+                    "points are technical replicates and large points are biological means. Statistical "
+                    "tests use biological means only (Friedman; paired Wilcoxon post-hoc with Holm correction)."
+                )
                 png_column, pdf_column = st.columns(2)
                 png_column.download_button(
                     "PNG · 600 dpi", item.png, f"{item.name}.png", "image/png", key=f"png_{item.name}"

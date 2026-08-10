@@ -1,2 +1,51 @@
-"""Biological-replicate-aware inference boundary."""
+"""Biological-replicate-aware inference boundary.
 
+Technical wells are deliberately collapsed before inference.  This prevents
+pseudoreplication while still allowing the plotting layer to display every well.
+"""
+
+from __future__ import annotations
+
+from itertools import combinations
+
+import numpy as np
+import pandas as pd
+from scipy.stats import friedmanchisquare, wilcoxon
+
+
+def paired_nonparametric_tests(
+    biological: pd.DataFrame, *, value: str, condition: str = "souche",
+    identity: tuple[str, ...] = ("experience_id", "replicat"),
+) -> tuple[float, pd.DataFrame]:
+    """Return a Friedman p-value and Holm-adjusted paired Wilcoxon comparisons.
+
+    Only complete biological blocks are used.  With fewer than three complete
+    blocks, inferential p-values are not reported because such tests would be
+    uninformative for a publication figure.
+    """
+    ids = [column for column in identity if column in biological and biological[column].notna().any()]
+    ids = ids or [column for column in ("Groupe",) if column in biological]
+    if not ids or condition not in biological or value not in biological:
+        return np.nan, pd.DataFrame(columns=["condition_1", "condition_2", "p_raw", "p_holm"])
+    table = biological.pivot_table(index=ids, columns=condition, values=value, aggfunc="mean").dropna()
+    if len(table) < 3 or table.shape[1] < 2:
+        return np.nan, pd.DataFrame(columns=["condition_1", "condition_2", "p_raw", "p_holm"])
+    omnibus = float(friedmanchisquare(*(table[column] for column in table.columns)).pvalue) \
+        if table.shape[1] >= 3 else np.nan
+    rows = []
+    for left, right in combinations(table.columns, 2):
+        try:
+            raw = float(wilcoxon(table[left], table[right], alternative="two-sided").pvalue)
+        except ValueError:
+            raw = 1.0
+        rows.append({"condition_1": left, "condition_2": right, "p_raw": raw})
+    result = pd.DataFrame(rows)
+    order = result["p_raw"].sort_values().index
+    adjusted = pd.Series(index=result.index, dtype=float)
+    running = 0.0
+    total = len(result)
+    for rank, index in enumerate(order):
+        running = max(running, min(1.0, result.at[index, "p_raw"] * (total - rank)))
+        adjusted.at[index] = running
+    result["p_holm"] = adjusted
+    return omnibus, result
