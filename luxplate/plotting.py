@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
+from matplotlib.ticker import ScalarFormatter
 from matplotlib.transforms import blended_transform_factory
 
 from luxplate.kinetics import run_kinetics
@@ -21,6 +22,14 @@ def _publication_style(axis):
     axis.spines[["top", "right"]].set_visible(False)
     axis.grid(False)
     axis.tick_params(width=0.8, length=3)
+
+
+def _scientific_rlu_axis(axis):
+    """Keep large RLU values compact and unambiguous (for example 8 × 10⁵)."""
+    formatter = ScalarFormatter(useMathText=True)
+    formatter.set_scientific(True)
+    formatter.set_powerlimits((0, 0))
+    axis.yaxis.set_major_formatter(formatter)
 
 
 def _series_label(row: pd.Series) -> str:
@@ -149,6 +158,8 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
                           marker="o", markersize=2.5, label=strain)
         axis.set(title=_display_panel(panel), xlabel="Time (h)", ylabel=ylabel)
         axis.set_yscale(y_scale)
+        if value == "Lum_corr" and y_scale == "linear":
+            _scientific_rlu_axis(axis)
         axis.title.set_fontweight("bold"); axis.title.set_ha("left"); axis.title.set_position((0, 1.0))
         _publication_style(axis)
     for axis in axes.flat[len(panels):]:
@@ -157,7 +168,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
     if handles:
         figure.legend(handles, [_display_strain(label) for label in labels], title="Reporter",
                       frameon=False, loc="upper center",
-                      bbox_to_anchor=(0.5, 0.94), ncol=min(5, len(labels)))
+                      bbox_to_anchor=(0.5, 0.955), ncol=min(5, len(labels)))
     figure.suptitle(title or f"{ylabel} over time", fontsize=13, fontweight="bold", y=0.995)
     # Identical limits prevent misleading visual comparisons between replicate panels.
     visible_axes = list(axes.flat[:len(panels)])
@@ -166,7 +177,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         shared_limits = (float(np.nanmin(limits[:, 0])), float(np.nanmax(limits[:, 1])))
         for axis in visible_axes:
             axis.set_ylim(shared_limits)
-    figure.subplots_adjust(top=0.78, bottom=0.12, hspace=0.48, wspace=0.34)
+    figure.subplots_adjust(top=0.72, bottom=0.12, hspace=0.48, wspace=0.34)
     return figure
 
 
@@ -238,16 +249,25 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
                       r"Normalized luminescence (RLU/OD$_{600}$)")
         bottom.set_ylabel(lum_ylabel)
         bottom.set_yscale(lum_scale)
+        if lum_value == "Lum_corr" and lum_scale == "linear":
+            _scientific_rlu_axis(bottom)
         top.title.set_fontweight("bold"); top.title.set_ha("left"); top.title.set_position((0, 1))
         _publication_style(top); _publication_style(bottom)
     for panel_index in range(len(panels), blocks * ncols):
         block, column = divmod(panel_index, ncols)
         axes[block, column].remove()
-    figure.legend(legend_handles, [_display_strain(line.get_label()) for line in legend_handles], title="Reporter",
-                  frameon=False, loc="upper center", bbox_to_anchor=(.5, .94),
-                  ncol=min(5, len(legend_handles)))
+    style_handles = [
+        Line2D([], [], color="#333333", lw=1.8, linestyle="-"),
+        Line2D([], [], color="#333333", lw=1.6, linestyle="--"),
+    ]
+    figure.legend([*legend_handles, *style_handles],
+                  [*[_display_strain(line.get_label()) for line in legend_handles],
+                   "Croissance (DO) — trait plein", "Luminescence (RLU) — pointillés"],
+                  title="Promoteur (couleur) · Mesure (style)",
+                  frameon=False, loc="upper center", bbox_to_anchor=(.5, .955),
+                  ncol=min(5, len(legend_handles) + 2))
     figure.suptitle(title or "Growth and luminescence", fontweight="bold", y=.995)
-    figure.subplots_adjust(top=.77, bottom=.13, hspace=.38, wspace=.52)
+    figure.subplots_adjust(top=.72, bottom=.13, hspace=.38, wspace=.52)
     return figure
 
 
@@ -402,7 +422,7 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     figures = []
     choices = (("growth", "DO_corr", "croissance", "linear", "Growth"),
                ("corrected", "Lum_corr", "luminescence_corrigee", lum_scale,
-                "Blank-corrected luminescence"),
+                "Luminescence"),
                ("normalized", "Lum_norm", "luminescence_normalisee", normalized_scale,
                 "Normalized luminescence"))
     for family, value, suffix, scale, figure_label in choices:

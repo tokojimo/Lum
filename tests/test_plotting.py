@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import ScalarFormatter
 
 from luxplate.plotting import (build_guided_raw_figures, build_publication_figures,
                                plot_kinetics, plot_metric_points, plot_mixed_panels,
@@ -59,6 +60,19 @@ def test_mixed_panels_offer_log_luminescence_and_error_bars():
     assert figure.axes[1].get_ylabel() == "Luminescence (RLU)"
     assert sum(line.get_linestyle() == "--" for line in figure.axes[1].lines) == 2
     assert all(len(axis.child_axes) == 0 for axis in figure.axes)
+    legend = figure.legends[0]
+    assert legend.get_title().get_text() == "Promoteur (couleur) · Mesure (style)"
+    assert legend.get_texts()[-1].get_text() == "Luminescence (RLU) — pointillés"
+    plt.close(figure)
+
+
+def test_linear_rlu_axes_use_scientific_notation_and_plain_title():
+    figure = plot_publication_panels(_publication_table(), value="Lum_corr", title="Luminescence")
+    axis = figure.axes[0]
+    assert isinstance(axis.yaxis.get_major_formatter(), ScalarFormatter)
+    figure.canvas.draw()
+    assert axis.yaxis.get_offset_text().get_text()
+    assert figure._suptitle.get_text() == "Luminescence"
     plt.close(figure)
 
 
