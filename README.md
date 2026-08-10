@@ -44,6 +44,13 @@ Upload a Varioskan kinetic workbook, explicitly select the luminescence sheet,
 inspect the unaveraged long table and raw curves, then download the CSV used by
 the following historical stages.
 
+The **Analyse guidée** tab provides the shortest route for a real run: upload an
+XLSX/XLSM workbook, confirm the detected strains and media/groups, inspect blank,
+OD and luminescence curves, select individual observations or complete curves
+for exclusion, then run blank correction, OD normalization and kinetic extraction
+with one button. The source workbook is never modified, and the final data,
+kinetic metrics and exclusion journal can be downloaded separately.
+
 ## Workflow
 
 1. Import

@@ -13,15 +13,150 @@ from luxplate.plotting import (plot_blank_correction, plot_kinetics, plot_normal
                                plot_qc_curves, plot_raw_curves)
 from luxplate.qc import run_quality_control
 from luxplate.varioskan import inspect_workbook, parse_kinetic_workbook
+from luxplate.workflow import build_manual_decisions, filter_experiment_data, run_complete_analysis
 
 st.set_page_config(page_title="LuxPlate Analyzer", page_icon="🧫", layout="wide")
 st.title("LuxPlate Analyzer")
 st.caption("Du classeur Varioskan brut aux données contrôlées, analysées et visualisées.")
 
-import_tab, qc_tab, blanks_tab, normalization_tab, kinetics_tab = st.tabs(
-    ["1 · Import et mise en forme", "2 · Contrôle qualité", "3 · Correction des blancs",
+guided_tab, import_tab, qc_tab, blanks_tab, normalization_tab, kinetics_tab = st.tabs(
+    ["▶ Analyse guidée", "1 · Import et mise en forme", "2 · Contrôle qualité", "3 · Correction des blancs",
      "4 · Normalisation par la DO", "5 · Paramètres cinétiques"]
 )
+
+with guided_tab:
+    st.header("Analyse guidée d'un classeur réel")
+    st.write(
+        "Déposez votre fichier, vérifiez les souches et milieux détectés, retirez si nécessaire "
+        "des points ou des courbes, puis lancez tout le calcul en une fois."
+    )
+    guided_upload = st.file_uploader(
+        "Déposer un classeur Varioskan (.xlsx ou .xlsm)", type=["xlsx", "xlsm"], key="guided_upload"
+    )
+    if guided_upload is None:
+        st.info("Le fichier reste traité localement par l'application.")
+    else:
+        try:
+            guided_payload = guided_upload.getvalue()
+            _, guided_lum_sheets = inspect_workbook(BytesIO(guided_payload))
+            guided_lum = st.selectbox("Lecture de luminescence à utiliser", guided_lum_sheets)
+            guided_data = parse_kinetic_workbook(BytesIO(guided_payload), guided_lum)
+        except Exception as error:
+            st.error(f"Import impossible : {error}")
+        else:
+            strain_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "souche"].unique())
+            group_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "Groupe"].unique())
+            select_columns = st.columns(2)
+            guided_strains = select_columns[0].multiselect(
+                "Souches à analyser", strain_options, default=strain_options
+            )
+            guided_groups = select_columns[1].multiselect(
+                "Milieux / groupes à analyser", group_options, default=group_options
+            )
+            try:
+                guided_selected = filter_experiment_data(guided_data, guided_strains, guided_groups)
+            except ValueError as error:
+                st.warning(str(error))
+            else:
+                guided_signature = (
+                    guided_upload.name, hash(guided_payload), guided_lum,
+                    tuple(guided_strains), tuple(guided_groups),
+                )
+                if st.session_state.get("guided_signature") != guided_signature:
+                    st.session_state.pop("guided_complete_result", None)
+                    st.session_state.pop("guided_decisions", None)
+                    st.session_state["guided_signature"] = guided_signature
+                blanks = guided_selected.loc[guided_selected["type"].eq("blanc")]
+                if blanks.empty:
+                    st.error("Aucun blanc n'a été détecté pour les milieux sélectionnés.")
+                else:
+                    st.success(
+                        f"{len(guided_strains)} souche(s), {len(guided_groups)} milieu(x), "
+                        f"{guided_selected['sample_header'].nunique()} courbe(s) et "
+                        f"{blanks['sample_header'].nunique()} blanc(s) détectés."
+                    )
+                raw_qc = run_quality_control(guided_selected)
+                info_tabs = st.tabs(["Blancs importés", "Courbes DO", "Courbes de luminescence", "QC automatique"])
+                with info_tabs[0]:
+                    st.dataframe(blanks, use_container_width=True, hide_index=True)
+                with info_tabs[1]:
+                    st.line_chart(guided_selected.pivot_table(
+                        index="temps_h", columns="sample_header", values="DO_brute", aggfunc="first"
+                    ))
+                with info_tabs[2]:
+                    st.line_chart(guided_selected.pivot_table(
+                        index="temps_h", columns="sample_header", values="Lum_brute", aggfunc="first"
+                    ))
+                with info_tabs[3]:
+                    st.dataframe(raw_qc.series_summary, use_container_width=True, hide_index=True)
+
+                st.subheader("Points et courbes à supprimer")
+                st.caption(
+                    "Cochez les lignes à supprimer. Une suppression de point retire ensemble la DO et la "
+                    "luminescence mesurées à ce temps ; le fichier source n'est jamais modifié."
+                )
+                editable_points = guided_selected.reset_index(names="source_index").copy()
+                editable_points.insert(0, "Supprimer", False)
+                edited_points = st.data_editor(
+                    editable_points[["Supprimer", "source_index", "type", "souche", "Groupe", "sample_header",
+                                     "puits", "temps_h", "DO_brute", "Lum_brute"]],
+                    disabled=["source_index", "type", "souche", "Groupe", "sample_header", "puits",
+                              "temps_h", "DO_brute", "Lum_brute"],
+                    hide_index=True, use_container_width=True, key="guided_point_editor",
+                )
+                strain_headers = guided_selected.loc[
+                    guided_selected["type"].eq("souche"), "sample_header"
+                ].drop_duplicates().tolist()
+                removed_series = st.multiselect("Courbes entières à supprimer", strain_headers)
+
+                with st.expander("Paramètres de calcul", expanded=False):
+                    p1, p2, p3, p4 = st.columns(4)
+                    guided_min_od = p1.number_input("DO minimale", min_value=0.0, value=0.05, step=0.01)
+                    guided_consecutive = p2.number_input("Points consécutifs", min_value=1, value=3, step=1)
+                    guided_window = p3.number_input("Points par fenêtre", min_value=2, value=3, step=1)
+                    guided_r2 = p4.number_input("R² minimal", min_value=0.0, max_value=1.0, value=0.0, step=0.05)
+
+                if st.button("Lancer toute l'analyse", type="primary", disabled=blanks.empty):
+                    removed_points = edited_points.loc[edited_points["Supprimer"], "source_index"].astype(int).tolist()
+                    manual_decisions = build_manual_decisions(guided_selected, removed_points, removed_series)
+                    try:
+                        complete = run_complete_analysis(
+                            guided_selected, manual_decisions, minimum_od=float(guided_min_od),
+                            consecutive_points=int(guided_consecutive), growth_window_points=int(guided_window),
+                            growth_rate_min_r_squared=float(guided_r2),
+                        )
+                    except ValueError as error:
+                        st.error(f"Analyse impossible : {error}")
+                    else:
+                        st.session_state["guided_complete_result"] = complete
+                        st.session_state["guided_decisions"] = manual_decisions
+
+                if "guided_complete_result" in st.session_state:
+                    complete = st.session_state["guided_complete_result"]
+                    st.subheader("Résultats complets")
+                    cards = st.columns(4)
+                    cards[0].metric("Points exclus", len(complete.blank_correction.excluded_data))
+                    cards[1].metric("Points normalisés", int(complete.normalization.normalized_data["normalization_ok"].sum()))
+                    cards[2].metric("Séries analysées", len(complete.kinetics.series_metrics))
+                    cards[3].metric("Avertissements", len(complete.kinetics.warnings))
+                    result_tabs = st.tabs(["Blancs corrigés", "Normalisation", "Cinétique", "Courbes finales"])
+                    with result_tabs[0]:
+                        st.dataframe(complete.blank_correction.blank_profiles, use_container_width=True, hide_index=True)
+                    with result_tabs[1]:
+                        st.dataframe(complete.normalization.normalized_data, use_container_width=True, hide_index=True)
+                    with result_tabs[2]:
+                        st.dataframe(complete.kinetics.series_metrics, use_container_width=True, hide_index=True)
+                    with result_tabs[3]:
+                        st.pyplot(plot_kinetics(complete.normalization.normalized_data,
+                                                complete.kinetics.series_metrics), use_container_width=True)
+                    base = guided_upload.name.rsplit(".", 1)[0]
+                    exports = st.columns(3)
+                    exports[0].download_button("Données finales", complete.normalization.normalized_data.to_csv(
+                        index=False).encode("utf-8-sig"), f"{base}_donnees_finales.csv", "text/csv")
+                    exports[1].download_button("Métriques cinétiques", complete.kinetics.series_metrics.to_csv(
+                        index=False).encode("utf-8-sig"), f"{base}_metriques_cinetiques.csv", "text/csv")
+                    exports[2].download_button("Décisions d'exclusion", st.session_state["guided_decisions"].to_csv(
+                        index=False).encode("utf-8-sig"), f"{base}_decisions_exclusion.csv", "text/csv")
 
 with import_tab:
     st.header("1 · Import et mise en forme")
@@ -172,7 +307,6 @@ with blanks_tab:
         except ValueError as error:
             st.error(f"Correction des blancs impossible : {error}")
         else:
-            st.session_state["normalization_result"] = normalization
             st.session_state["blank_correction_result"] = correction
             metrics = dict(zip(correction.summary["metrique"], correction.summary["valeur"]))
             col1, col2, col3, col4 = st.columns(4)
