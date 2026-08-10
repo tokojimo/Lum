@@ -19,7 +19,16 @@ def _publication_style(axis):
 
 
 def _series_label(row: pd.Series) -> str:
-    return str(row.get("souche", row.get("sample_header", "Série")))
+    return str(row.get("souche", row.get("sample_header", "Series")))
+
+
+def _display_strain(value: object) -> str:
+    """Use compact reporter names on axes while retaining full names in the data."""
+    strain = str(value)
+    for reporter in ("PspeD2-1A-lux", "PspeD2-3B-lux", "P0-lux"):
+        if reporter.casefold() in strain.casefold():
+            return reporter.removesuffix("-lux")
+    return strain
 
 
 def _strain_colors(data: pd.DataFrame) -> dict[str, str]:
@@ -39,9 +48,9 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
     required = {"temps_h", "souche", "sample_header", value, group_by}
     missing = required.difference(data.columns)
     if missing:
-        raise ValueError(f"Colonnes manquantes pour la figure : {sorted(missing)}")
+        raise ValueError(f"Missing columns for figure: {sorted(missing)}")
     if y_scale not in {"linear", "log"}:
-        raise ValueError("L'échelle doit être 'linear' ou 'log'.")
+        raise ValueError("Scale must be 'linear' or 'log'.")
     work = data.loc[data[value].notna()].copy()
     if y_scale == "log":
         work = work.loc[pd.to_numeric(work[value], errors="coerce").gt(0)]
@@ -49,12 +58,13 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         work = work.loc[work["type"].eq("souche")]
     panels = list(dict.fromkeys(work[group_by].dropna().astype(str)))
     if not panels:
-        raise ValueError("Aucune donnée exploitable pour construire les figures finales.")
+        raise ValueError("No usable data available for the final figures.")
     strain_colors = _strain_colors(work)
     ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
     figure, axes = plt.subplots(nrows, ncols, figsize=(4.1 * ncols, 3.15 * nrows), squeeze=False)
-    ylabel = {"DO_corr": "Densité optique corrigée", "Lum_corr": "Luminescence corrigée (RLU)",
-              "Lum_norm": "Luminescence normalisée (RLU / DO)"}.get(value, value)
+    ylabel = {"DO_corr": r"Blank-corrected OD$_{600}$",
+              "Lum_corr": "Blank-corrected luminescence (RLU)",
+              "Lum_norm": r"Normalized luminescence (RLU/OD$_{600}$)"}.get(value, value)
     for panel_index, panel in enumerate(panels):
         axis = axes.flat[panel_index]
         subset = work.loc[work[group_by].astype(str).eq(panel)]
@@ -70,7 +80,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
             sd = summary["std"].fillna(0).to_numpy(float)
             axis.fill_between(x, y - sd, y + sd, color=color, alpha=0.14, linewidth=0)
             axis.plot(x, y, color=color, lw=2, label=strain)
-        axis.set(title=panel, xlabel="Temps (h)", ylabel=ylabel)
+        axis.set(title=panel, xlabel="Time (h)", ylabel=ylabel)
         axis.set_yscale(y_scale)
         axis.title.set_fontweight("bold"); axis.title.set_ha("left"); axis.title.set_position((0, 1.0))
         _publication_style(axis)
@@ -78,11 +88,19 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         axis.remove()
     handles, labels = axes.flat[0].get_legend_handles_labels()
     if handles:
-        figure.legend(handles, labels, title="Souche", frameon=False, loc="upper center",
+        figure.legend(handles, [_display_strain(label) for label in labels], title="Strain",
+                      frameon=False, loc="upper center",
                       bbox_to_anchor=(0.5, 0.93), ncol=min(5, len(labels)))
-    figure.suptitle(title or f"{ylabel} au cours du temps", fontsize=13, fontweight="bold", y=0.995)
-    figure.text(0.5, 0.955, "Lignes fines = puits techniques · ligne épaisse = moyenne · ruban = ± écart-type",
+    figure.suptitle(title or f"{ylabel} over time", fontsize=13, fontweight="bold", y=0.995)
+    figure.text(0.5, 0.955, "Thin lines: technical wells; thick line and ribbon: mean ± SD",
                 ha="center", color="#555555", fontsize=8)
+    # Identical limits prevent misleading visual comparisons between replicate panels.
+    visible_axes = list(axes.flat[:len(panels)])
+    if visible_axes:
+        limits = np.asarray([axis.get_ylim() for axis in visible_axes], dtype=float)
+        shared_limits = (float(np.nanmin(limits[:, 0])), float(np.nanmax(limits[:, 1])))
+        for axis in visible_axes:
+            axis.set_ylim(shared_limits)
     figure.subplots_adjust(top=0.82, bottom=0.12, hspace=0.48, wspace=0.34)
     return figure
 
@@ -94,13 +112,13 @@ def _mean_sd(data: pd.DataFrame, value: str) -> pd.DataFrame:
 def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
                       uncertainty: str = "bars", title: str | None = None,
                       media: list[str] | None = None, strains: list[str] | None = None):
-    """Plot corrected OD and luminescence on configurable twin axes."""
-    required = {"temps_h", "souche", "Groupe", "DO_corr", "Lum_corr"}
+    """Plot aligned OD and normalized-luminescence panels without dual y-axes."""
+    required = {"temps_h", "souche", "Groupe", "DO_corr", "Lum_norm"}
     missing = required.difference(data.columns)
     if missing:
-        raise ValueError(f"Colonnes manquantes pour la figure mixte : {sorted(missing)}")
+        raise ValueError(f"Missing columns for combined figure: {sorted(missing)}")
     if lum_scale not in {"linear", "log"} or uncertainty not in {"bars", "ribbon"}:
-        raise ValueError("Échelle ou représentation d'incertitude inconnue.")
+        raise ValueError("Unknown scale or uncertainty representation.")
     work = data.loc[data.get("type", "souche").eq("souche")].copy() if "type" in data else data.copy()
     if media:
         work = work.loc[work["Groupe"].astype(str).isin(media)]
@@ -108,91 +126,107 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
         work = work.loc[work["souche"].astype(str).isin(strains)]
     panels = list(dict.fromkeys(work["Groupe"].dropna().astype(str)))
     if not panels:
-        raise ValueError("Aucune condition sélectionnée pour la figure mixte.")
+        raise ValueError("No condition selected for combined figure.")
     strain_colors = _strain_colors(work)
-    ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
-    figure, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.4 * nrows), squeeze=False)
+    ncols = min(3, len(panels)); blocks = int(np.ceil(len(panels) / ncols))
+    figure, axes = plt.subplots(2 * blocks, ncols, figsize=(4.3 * ncols, 5.4 * blocks), squeeze=False)
     legend_handles = []
     for panel_index, medium in enumerate(panels):
-        left = axes.flat[panel_index]; right = left.twinx()
+        block, column = divmod(panel_index, ncols)
+        top, bottom = axes[2 * block, column], axes[2 * block + 1, column]
         subset = work.loc[work["Groupe"].astype(str).eq(medium)]
         for strain, strain_data in subset.groupby("souche", sort=False):
             color = strain_colors[str(strain)]
-            od = _mean_sd(strain_data, "DO_corr"); lum = _mean_sd(strain_data, "Lum_corr")
+            od = _mean_sd(strain_data, "DO_corr"); lum = _mean_sd(strain_data, "Lum_norm")
             ox = od["temps_h"].to_numpy(float); oy = od["mean"].to_numpy(float)
             osd = od["std"].fillna(0).to_numpy(float)
             lx = lum["temps_h"].to_numpy(float); ly = lum["mean"].to_numpy(float)
             lsd = lum["std"].fillna(0).to_numpy(float)
             if uncertainty == "ribbon":
-                left.fill_between(ox, oy - osd, oy + osd, color=color, alpha=.14, linewidth=0)
+                top.fill_between(ox, oy - osd, oy + osd, color=color, alpha=.14, linewidth=0)
                 lower = ly - lsd
                 if lum_scale == "log": lower = np.where(lower > 0, lower, np.nan)
-                right.fill_between(lx, lower, ly + lsd, color=color, alpha=.09, linewidth=0)
-                od_line, = left.plot(ox, oy, color=color, lw=1.8, marker="o", markersize=2.5,
+                bottom.fill_between(lx, lower, ly + lsd, color=color, alpha=.09, linewidth=0)
+                od_line, = top.plot(ox, oy, color=color, lw=1.8, marker="o", markersize=2.5,
                                      markerfacecolor="white", label=str(strain))
-                right.plot(lx, np.where(ly > 0, ly, np.nan) if lum_scale == "log" else ly,
-                           color=color, lw=1.6, ls="--", marker="s", markersize=2.3,
+                bottom.plot(lx, np.where(ly > 0, ly, np.nan) if lum_scale == "log" else ly,
+                           color=color, lw=1.6, marker="s", markersize=2.3,
                            markerfacecolor="white")
             else:
-                od_line = left.errorbar(ox, oy, yerr=osd, color=color, lw=1.35, marker="o",
+                od_line = top.errorbar(ox, oy, yerr=osd, color=color, lw=1.35, marker="o",
                     markersize=2.5, markerfacecolor="white", capsize=2, label=str(strain)).lines[0]
                 valid = ly > 0 if lum_scale == "log" else np.ones(len(ly), dtype=bool)
-                right.errorbar(lx[valid], ly[valid], yerr=lsd[valid], color=color, lw=1.25,
-                    ls="--", marker="s", markersize=2.3, markerfacecolor="white", capsize=2)
+                bottom.errorbar(lx[valid], ly[valid], yerr=lsd[valid], color=color, lw=1.25,
+                    marker="s", markersize=2.3, markerfacecolor="white", capsize=2)
             if panel_index == 0: legend_handles.append(od_line)
-        left.set(title=medium, xlabel="Temps (h)", ylabel="DO corrigée")
-        right.set_ylabel("Luminescence corrigée (RLU)"); right.set_yscale(lum_scale)
-        left.title.set_fontweight("bold"); left.title.set_ha("left"); left.title.set_position((0, 1))
-        _publication_style(left); right.grid(False); right.spines["top"].set_visible(False)
-    for axis in axes.flat[len(panels):]: axis.remove()
-    figure.legend(legend_handles, [line.get_label() for line in legend_handles], title="Souche",
-                  frameon=False, loc="upper center", ncol=min(5, len(legend_handles)))
-    figure.suptitle(title or "Croissance et luminescence corrigée", fontweight="bold", y=.995)
-    figure.text(.5, .95, "DO : trait plein, cercles · Luminescence : pointillés, carrés",
-                ha="center", fontsize=8, color="#555555")
-    figure.subplots_adjust(top=.82, bottom=.13, hspace=.5, wspace=.55)
+        top.set(title=medium, ylabel=r"Blank-corrected OD$_{600}$")
+        bottom.set(xlabel="Time (h)", ylabel=r"Normalized luminescence (RLU/OD$_{600}$)")
+        bottom.set_yscale(lum_scale); top.tick_params(labelbottom=False)
+        top.title.set_fontweight("bold"); top.title.set_ha("left"); top.title.set_position((0, 1))
+        _publication_style(top); _publication_style(bottom)
+    for panel_index in range(len(panels), blocks * ncols):
+        block, column = divmod(panel_index, ncols)
+        axes[2 * block, column].remove(); axes[2 * block + 1, column].remove()
+    figure.legend(legend_handles, [_display_strain(line.get_label()) for line in legend_handles], title="Strain",
+                  frameon=False, loc="upper center", bbox_to_anchor=(.5, .945),
+                  ncol=min(5, len(legend_handles)))
+    figure.suptitle(title or "Growth and normalized luminescence", fontweight="bold", y=.995)
+    figure.subplots_adjust(top=.80, bottom=.11, hspace=.12, wspace=.38)
     return figure
 
 
 def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "linear",
                        title: str | None = None):
-    """Plot one point per technical series, grouped by strain and medium."""
+    """Plot technical-replicate means as paired independent experiments."""
     required = {"souche", "Groupe", metric}
     missing = required.difference(metrics.columns)
-    if missing: raise ValueError(f"Colonnes manquantes pour le paramètre : {sorted(missing)}")
+    if missing: raise ValueError(f"Missing columns for metric: {sorted(missing)}")
     work = metrics.loc[pd.to_numeric(metrics[metric], errors="coerce").notna()].copy()
     if y_scale == "log": work = work.loc[work[metric].gt(0)]
     strains = list(dict.fromkeys(work["souche"].astype(str)))
-    media = list(dict.fromkeys(work["Groupe"].astype(str)))
+    biological_columns = [column for column in ("experience_id", "replicat") if column in work]
+    group_columns = ["souche", "Groupe", *biological_columns]
+    work = work.groupby(group_columns, dropna=False, sort=False)[metric].mean().reset_index()
+    biological_columns = biological_columns or ["Groupe"]
     figure, axis = plt.subplots(figsize=(max(6, 1.15 * len(strains)), 4.5))
     rng = np.random.default_rng(1947)
     markers = ("o", "s", "^", "D", "v", "P", "X")
-    width = .65 / max(1, len(media))
-    for medium_index, medium in enumerate(media):
-        subset = work.loc[work["Groupe"].astype(str).eq(medium)]
-        offset = (medium_index - (len(media) - 1) / 2) * width
+    identities = list(work[biological_columns].drop_duplicates().itertuples(index=False, name=None))
+    for identity_index, identity in enumerate(identities):
+        mask = np.ones(len(work), dtype=bool)
+        for column, value in zip(biological_columns, identity):
+            mask &= work[column].eq(value).to_numpy()
+        subset = work.loc[mask]
+        xs, ys = [], []
         for strain_index, strain in enumerate(strains):
             values = subset.loc[subset["souche"].astype(str).eq(strain), metric].to_numpy(float)
-            x = strain_index + offset + rng.uniform(-width * .22, width * .22, len(values))
-            axis.scatter(x, values, s=32, marker=markers[medium_index % len(markers)],
-                         color=PUBLICATION_COLORS[strain_index % len(PUBLICATION_COLORS)],
-                         edgecolor="white", linewidth=.6, alpha=.95,
-                         label=medium if strain_index == 0 else None)
-    axis.set_xticks(range(len(strains)), strains, rotation=25, ha="right")
-    axis.set(xlabel="Souche", ylabel=metric, title=title or metric); axis.set_yscale(y_scale)
+            if len(values):
+                x = strain_index + rng.uniform(-.025, .025)
+                xs.append(x); ys.append(values[0])
+                axis.scatter(x, values[0], s=40, marker=markers[identity_index % len(markers)],
+                    color=PUBLICATION_COLORS[strain_index % len(PUBLICATION_COLORS)],
+                    edgecolor="white", linewidth=.6, zorder=3,
+                    label=" | ".join(map(str, identity)) if strain_index == 0 else None)
+        axis.plot(xs, ys, color="#888888", alpha=.45, lw=.8, zorder=1)
+    metric_labels = {"lum_norm_peak": r"Peak normalized luminescence (RLU/OD$_{600}$)",
+        "lum_norm_auc": r"Normalized luminescence AUC (RLU/OD$_{600}$)·h",
+        "doubling_time_h": "Doubling time (h)"}
+    axis.set_xticks(range(len(strains)), [_display_strain(s) for s in strains])
+    axis.set(xlabel="Strain", ylabel=metric_labels.get(metric, metric), title=title or metric_labels.get(metric, metric))
+    axis.set_yscale(y_scale)
     axis.title.set_fontweight("bold"); _publication_style(axis)
-    if media: axis.legend(title="Milieu", frameon=False, bbox_to_anchor=(1.02, 1), loc="upper left")
+    if identities: axis.legend(title="Independent experiment", frameon=False, loc="best", fontsize="small")
     figure.tight_layout(); return figure
 
 
 def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
                               lum_scale: str = "linear", uncertainty: str = "bars",
-                              title: str = "Comparaison au contrôle") -> list[tuple[str, object]]:
-    """Build one twin-axis comparison figure per reporter strain."""
+                              title: str = "Control comparison") -> list[tuple[str, object]]:
+    """Build one aligned-panel comparison figure per reporter strain."""
     strains = list(dict.fromkeys(data["souche"].dropna().astype(str)))
     matching = [strain for strain in strains if strain.casefold() == control.casefold()]
     if not matching:
-        raise ValueError(f"Le contrôle {control!r} est absent des données sélectionnées.")
+        raise ValueError(f"Control {control!r} is absent from the selected data.")
     actual_control = matching[0]
     figures = []
     for reporter in (strain for strain in strains if strain != actual_control):
@@ -203,37 +237,40 @@ def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
     return figures
 
 
-def build_publication_figures(data: pd.DataFrame, *, title: str = "Analyse LuxPlate",
+def build_publication_figures(data: pd.DataFrame, *, title: str = "LuxPlate analysis",
     families: tuple[str, ...] = ("growth", "normalized", "mixed", "peak", "auc", "doubling"),
     panel_by: str = "Groupe", lum_scale: str = "linear", normalized_scale: str = "linear",
     metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux") -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
     figures = []
-    choices = (("growth", "DO_corr", "croissance", "linear"),
-               ("corrected", "Lum_corr", "luminescence_corrigee", lum_scale),
-               ("normalized", "Lum_norm", "luminescence_normalisee", normalized_scale))
-    for family, value, suffix, scale in choices:
+    choices = (("growth", "DO_corr", "croissance", "linear", "Growth"),
+               ("corrected", "Lum_corr", "luminescence_corrigee", lum_scale,
+                "Blank-corrected luminescence"),
+               ("normalized", "Lum_norm", "luminescence_normalisee", normalized_scale,
+                "Normalized luminescence"))
+    for family, value, suffix, scale, figure_label in choices:
         if family in families and value in data and data[value].notna().any():
             figures.append((suffix, plot_publication_panels(data, value=value, group_by=panel_by,
-                y_scale=scale, title=f"{title} — {suffix.replace('_', ' ')}")))
+                y_scale=scale, title=f"{title} — {figure_label}")))
     if "mixed" in families:
         figures.append(("croissance_luminescence_mixte", plot_mixed_panels(
-            data, lum_scale=lum_scale, uncertainty=uncertainty, title=f"{title} — DO + luminescence")))
-    metric_families = {"peak": ("lum_norm_peak", "pic_luminescence_normalisee"),
-                       "auc": ("lum_norm_auc", "auc_luminescence_normalisee"),
-                       "doubling": ("doubling_time_h", "temps_doublement")}
+            data, lum_scale=lum_scale, uncertainty=uncertainty,
+            title=f"{title} — growth and normalized luminescence")))
+    metric_families = {"peak": ("lum_norm_peak", "pic_luminescence_normalisee", "Peak normalized luminescence"),
+                       "auc": ("lum_norm_auc", "auc_luminescence_normalisee", "Normalized luminescence AUC"),
+                       "doubling": ("doubling_time_h", "temps_doublement", "Doubling time")}
     requested = set(families).intersection(metric_families)
     if requested:
         metrics = run_kinetics(data).series_metrics
         for family in ("peak", "auc", "doubling"):
             if family in requested:
-                metric, suffix = metric_families[family]
+                metric, suffix, figure_label = metric_families[family]
                 scale = "linear" if family == "doubling" else metric_scale
                 figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
-                    title=f"{title} — {suffix.replace('_', ' ')}")))
+                    title=f"{title} — {figure_label}")))
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
-            uncertainty=uncertainty, title=f"{title} — comparaison ciblée"))
+            uncertainty=uncertainty, title=f"{title} — targeted control comparison"))
     return figures
 
 
@@ -249,8 +286,8 @@ def plot_raw_curves(data: pd.DataFrame):
         label = str(curve["souche"].iloc[0])
         axes[0].plot(curve["temps_h"], curve["DO_brute"], marker="o", markersize=3, alpha=0.75, label=label)
         axes[1].plot(curve["temps_h"], curve["Lum_brute"], marker="o", markersize=3, alpha=0.75, label=label)
-    axes[0].set(title="Croissance brute", xlabel="Temps (h)", ylabel="DO brute")
-    axes[1].set(title="Luminescence brute", xlabel="Temps (h)", ylabel="Luminescence brute (RLU)")
+    axes[0].set(title="Raw growth", xlabel="Time (h)", ylabel=r"Raw OD$_{600}$")
+    axes[1].set(title="Raw luminescence", xlabel="Time (h)", ylabel="Raw luminescence (RLU)")
     for axis in axes:
         handles, labels = axis.get_legend_handles_labels()
         unique = dict(zip(labels, handles))
@@ -275,15 +312,15 @@ def build_guided_raw_figures(data: pd.DataFrame, *, sample_type: str) -> list[tu
     figures: list[tuple[str, object]] = []
     for keys, replicate in work.groupby(["Groupe", "souche", "replicat"], dropna=False, sort=False):
         medium, strain, biological_replicate = keys
-        title = f"{medium} · {strain} · réplicat biologique {biological_replicate}"
+        title = f"{medium} · {strain} · biological replicate {biological_replicate}"
         figure, axes = plt.subplots(1, 2, figsize=(10, 3.6), constrained_layout=True)
         for header, curve in replicate.groupby("sample_header", sort=False):
             curve = curve.sort_values("temps_h", kind="stable")
             label = str(header)
             axes[0].plot(curve["temps_h"], curve["DO_brute"], lw=1.4, label=label)
             axes[1].plot(curve["temps_h"], curve["Lum_brute"], lw=1.4, label=label)
-        axes[0].set(title="DO", xlabel="Temps (h)", ylabel="DO brute")
-        axes[1].set(title="Luminescence", xlabel="Temps (h)", ylabel="Luminescence brute (RLU)")
+        axes[0].set(title="Optical density", xlabel="Time (h)", ylabel=r"Raw OD$_{600}$")
+        axes[1].set(title="Luminescence", xlabel="Time (h)", ylabel="Raw luminescence (RLU)")
         for axis in axes:
             _publication_style(axis)
             axis.legend(fontsize="x-small", frameon=False, loc="best")
@@ -326,8 +363,8 @@ def plot_blank_correction(data: pd.DataFrame):
         axes[0].plot(curve["temps_h"], curve["DO_corr"], alpha=0.8, label=label)
         axes[1].plot(curve["temps_h"], curve["Lum_brute"], color="0.7", alpha=0.45)
         axes[1].plot(curve["temps_h"], curve["Lum_corr"], alpha=0.8, label=label)
-    axes[0].set(title="DO : brute (gris) / corrigée", xlabel="Temps (h)", ylabel="DO")
-    axes[1].set(title="Luminescence : brute (gris) / corrigée", xlabel="Temps (h)", ylabel="Luminescence (RLU)")
+    axes[0].set(title="OD: raw (gray) / blank-corrected", xlabel="Time (h)", ylabel=r"OD$_{600}$")
+    axes[1].set(title="Luminescence: raw (gray) / blank-corrected", xlabel="Time (h)", ylabel="Luminescence (RLU)")
     for axis in axes:
         handles, labels = axis.get_legend_handles_labels()
         unique = dict(zip(labels, handles))
@@ -349,8 +386,9 @@ def plot_normalization(data: pd.DataFrame):
         label = str(curve["souche"].iloc[0])
         axes[0].plot(curve["temps_h"], curve["Lum_corr"], alpha=0.8, label=label)
         axes[1].plot(curve["temps_h"], curve["Lum_norm"], alpha=0.8, label=label)
-    axes[0].set(title="Luminescence corrigée", xlabel="Temps (h)", ylabel="Luminescence (RLU)")
-    axes[1].set(title="Luminescence normalisée par la DO", xlabel="Temps (h)", ylabel="Lum_corr / DO_corr")
+    axes[0].set(title="Blank-corrected luminescence", xlabel="Time (h)", ylabel="Luminescence (RLU)")
+    axes[1].set(title="OD-normalized luminescence", xlabel="Time (h)",
+                ylabel=r"Normalized luminescence (RLU/OD$_{600}$)")
     for axis in axes:
         handles, labels = axis.get_legend_handles_labels()
         unique = dict(zip(labels, handles))
@@ -396,11 +434,13 @@ def plot_kinetics(data: pd.DataFrame, series_metrics: pd.DataFrame):
         if pd.notna(metric["max_growth_rate_start_h"]):
             axes[0].axvspan(metric["max_growth_rate_start_h"], metric["max_growth_rate_end_h"],
                             alpha=0.10, color="green")
-    axes[0].set(title="Croissance et fenêtre maximale", xlabel="Temps (h)", ylabel="DO corrigée")
-    axes[1].set(title="Luminescence et pic", xlabel="Temps (h)", ylabel="Luminescence normalisée")
+    axes[0].set(title="Growth and maximum-rate window", xlabel="Time (h)",
+                ylabel=r"Blank-corrected OD$_{600}$")
+    axes[1].set(title="Luminescence and peak", xlabel="Time (h)",
+                ylabel=r"Normalized luminescence (RLU/OD$_{600}$)")
     for axis in axes:
         axis.grid(alpha=0.2)
         handles, labels = axis.get_legend_handles_labels()
         if handles:
-            axis.legend(handles, labels, title="Souche", fontsize="small", loc="best")
+            axis.legend(handles, labels, title="Strain", fontsize="small", loc="best")
     return figure
