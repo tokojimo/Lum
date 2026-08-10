@@ -454,9 +454,8 @@ with kinetics_tab:
 with figures_tab:
     st.header("6 · Figures finales et export publication")
     st.write(
-        "Cette galerie reprend le style des scripts d'exemple : panneaux par milieu, courbes individuelles "
-        "discrètes, moyenne mise en avant et ruban ± écart-type. L'archive contient chaque figure en PNG "
-        "600 dpi et en PDF vectoriel."
+        "Composez librement la galerie inspirée des scripts d'exemple. Les échelles, l'organisation des "
+        "panneaux et la représentation de l'incertitude restent modifiables avant chaque export."
     )
     if "normalization_result" not in st.session_state:
         st.info("Exécutez d'abord la normalisation dans l'onglet 4.")
@@ -464,13 +463,46 @@ with figures_tab:
         figure_title = st.text_input(
             "Titre commun des figures", value=st.session_state.get("source_name", "Analyse LuxPlate")
         )
+        family_labels = {
+            "Croissance corrigée": "growth", "Luminescence corrigée": "corrected",
+            "Luminescence normalisée": "normalized", "Double axe DO + luminescence": "mixed",
+            "Pic normalisé": "peak", "AUC normalisée": "auc", "Temps de doublement": "doubling",
+            "Comparaisons ciblées au contrôle": "control",
+        }
+        selected_labels = st.multiselect(
+            "Figures à produire", list(family_labels), default=list(family_labels)
+        )
+        option_columns = st.columns(4)
+        panel_label = option_columns[0].selectbox("Organisation des courbes", ["Panneaux par milieu", "Panneaux par souche"])
+        lum_label = option_columns[1].selectbox("Échelle de luminescence", ["Linéaire", "Logarithmique"])
+        norm_label = option_columns[2].selectbox("Échelle Lum/DO", ["Linéaire", "Logarithmique"])
+        metric_label = option_columns[3].selectbox("Échelle AUC et pic", ["Logarithmique", "Linéaire"])
+        uncertainty_label = st.radio(
+            "Incertitude de la figure mixte", ["Barres ± SD", "Ruban ± SD"], horizontal=True
+        )
+        available_strains = sorted(
+            st.session_state["normalization_result"].normalized_data["souche"].dropna().astype(str).unique()
+        )
+        default_control = available_strains.index("P0-lux") if "P0-lux" in available_strains else 0
+        control_strain = st.selectbox("Souche contrôle des comparaisons ciblées", available_strains,
+                                      index=default_control)
         if st.button("Préparer la galerie", type="primary"):
-            with st.spinner("Création des figures haute résolution…"):
-                figures = build_publication_figures(
-                    st.session_state["normalization_result"].normalized_data, title=figure_title
-                )
-                rendered, archive = package_figures(figures, dpi=600)
-                st.session_state["publication_export"] = (figures, rendered, archive)
+            if not selected_labels:
+                st.warning("Sélectionnez au moins une famille de figures.")
+            else:
+                with st.spinner("Création des figures haute résolution…"):
+                    figures = build_publication_figures(
+                        st.session_state["normalization_result"].normalized_data, title=figure_title,
+                        families=tuple(family_labels[label] for label in selected_labels),
+                        panel_by="Groupe" if panel_label.endswith("milieu") else "souche",
+                        lum_scale="log" if lum_label == "Logarithmique" else "linear",
+                        normalized_scale="log" if norm_label == "Logarithmique" else "linear",
+                        metric_scale="log" if metric_label == "Logarithmique" else "linear",
+                        uncertainty="bars" if uncertainty_label.startswith("Barres") else "ribbon",
+                        control=control_strain,
+                    )
+                    rendered, archive = package_figures(figures, dpi=600)
+                    st.session_state["publication_export"] = (figures, rendered, archive)
         if "publication_export" in st.session_state:
             figures, rendered, archive = st.session_state["publication_export"]
             st.success(f"{len(rendered)} figure(s) préparée(s), dans deux formats chacune.")
