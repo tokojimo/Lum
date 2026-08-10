@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from luxplate.plotting import (build_guided_raw_figures, build_publication_figures,
-                               plot_mixed_panels, plot_publication_panels)
+                               plot_kinetics, plot_mixed_panels, plot_publication_panels)
 from test_workflow import workflow_table
 
 
@@ -70,3 +70,32 @@ def test_gallery_builds_one_targeted_control_comparison_per_reporter():
     assert [name for name, _ in figures] == ["comparaison_Reporter-lux_vs_P0-lux"]
     assert figures[0][1].axes[1].get_yscale() == "log"
     plt.close(figures[0][1])
+
+
+def test_kinetics_legend_excludes_blanks_and_deduplicates_strains():
+    data = _publication_table()
+    duplicate_experiment = data.copy()
+    duplicate_experiment["experience_id"] = "exp2"
+    blank = data.iloc[:3].copy()
+    blank["type"] = "blanc"
+    blank["souche"] = "Blanc1"
+    plotted = pd.concat([data, duplicate_experiment, blank], ignore_index=True)
+    metrics = pd.DataFrame(columns=[
+        "experience_id", "souche", "Groupe", "sample_header", "puits", "replicat",
+    ])
+
+    figure = plot_kinetics(plotted, metrics)
+
+    for axis in figure.axes:
+        labels = axis.get_legend_handles_labels()[1]
+        assert labels == ["P0-lux", "Reporter-lux"]
+    first_axis_colors = {
+        line.get_label(): line.get_color() for line in figure.axes[0].lines
+        if not line.get_label().startswith("_")
+    }
+    second_axis_colors = {
+        line.get_label(): line.get_color() for line in figure.axes[1].lines
+        if not line.get_label().startswith("_")
+    }
+    assert first_axis_colors == second_axis_colors
+    plt.close(figure)
