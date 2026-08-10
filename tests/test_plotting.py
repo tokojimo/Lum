@@ -75,7 +75,8 @@ def test_metric_points_average_technical_series_per_independent_experiment():
     points = [collection for collection in figure.axes[0].collections if len(collection.get_offsets())]
     assert len(points) == 4
     assert sorted(float(collection.get_offsets()[0, 1]) for collection in points) == [12, 12, 22, 22]
-    assert figure.axes[0].get_legend().get_title().get_text() == "Independent experiment"
+    assert figure.axes[0].get_legend().get_title().get_text() == "Replicate display"
+    assert len(figure.axes[0].patches) == 2
     plt.close(figure)
 
 
