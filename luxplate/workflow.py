@@ -24,8 +24,8 @@ def filter_experiment_data(
 ) -> pd.DataFrame:
     """Keep selected strains and automatically include their associated blanks.
 
-    ``groups`` is retained for API compatibility, but the interface no longer
-    needs to expose this technical blank-association key to users.
+    When ``groups`` is supplied, only the requested media are retained. Their
+    associated blanks are included automatically.
     """
     if not strains:
         raise ValueError("Sélectionnez au moins une souche.")
