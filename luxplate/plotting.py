@@ -183,7 +183,13 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     if missing: raise ValueError(f"Missing columns for metric: {sorted(missing)}")
     if y_scale not in {"linear", "log"}:
         raise ValueError("Scale must be 'linear' or 'log'.")
-    numeric_metric = pd.to_numeric(metrics[metric], errors="coerce")
+    # Treat infinities like missing measurements.  In particular, ``+inf``
+    # passes a simple ``> 0`` check but does not give Matplotlib a finite
+    # positive bound for a logarithmic axis, causing LogLocator to fail during
+    # layout with "Data cannot be log-scaled".
+    numeric_metric = pd.to_numeric(metrics[metric], errors="coerce").replace(
+        [np.inf, -np.inf], np.nan
+    )
     work = metrics.loc[numeric_metric.notna()].copy()
     work[metric] = numeric_metric.loc[work.index]
     effective_scale = y_scale

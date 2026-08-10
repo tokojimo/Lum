@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from luxplate.plotting import (build_guided_raw_figures, build_publication_figures,
@@ -90,6 +91,24 @@ def test_metric_points_fall_back_to_linear_when_log_data_are_non_positive():
     assert axis.get_yscale() == "linear"
     points = [collection for collection in axis.collections if len(collection.get_offsets())]
     assert sorted(float(collection.get_offsets()[0, 1]) for collection in points) == [-2.0, 0.0]
+    plt.close(figure)
+
+
+def test_metric_points_ignore_infinities_before_selecting_log_scale():
+    metrics = pd.DataFrame([
+        {"souche": "P0-lux", "Groupe": "SCFM2", "lum_norm_auc": np.inf},
+        {"souche": "Reporter-lux", "Groupe": "SCFM2", "lum_norm_auc": -np.inf},
+        {"souche": "Reporter-lux", "Groupe": "SCFM2", "lum_norm_auc": 0.0},
+    ])
+
+    figure = plot_metric_points(metrics, metric="lum_norm_auc", y_scale="log")
+
+    axis = figure.axes[0]
+    assert axis.get_yscale() == "linear"
+    points = [collection for collection in axis.collections if len(collection.get_offsets())]
+    assert [float(collection.get_offsets()[0, 1]) for collection in points] == [0.0]
+    # Exercise the layout/rendering path where Matplotlib's LogLocator raised.
+    figure.canvas.draw()
     plt.close(figure)
 
 
