@@ -46,3 +46,27 @@ def plot_qc_curves(data: pd.DataFrame, anomalies: pd.DataFrame):
             unique = dict(zip(labels, handles))
             axis.legend(unique.values(), unique.keys(), fontsize="small", loc="best")
     return figure
+
+
+def plot_blank_correction(data: pd.DataFrame):
+    """Compare raw and blank-corrected strain curves."""
+    required = {"temps_h", "souche", "sample_header", "DO_brute", "Lum_brute", "DO_corr", "Lum_corr"}
+    missing = required.difference(data.columns)
+    if missing:
+        raise ValueError(f"Colonnes manquantes pour la figure : {sorted(missing)}")
+    figure, axes = plt.subplots(1, 2, figsize=(12, 4.5), constrained_layout=True)
+    for _, curve in data.groupby("sample_header", sort=False):
+        curve = curve.sort_values("temps_h")
+        label = str(curve["souche"].iloc[0])
+        axes[0].plot(curve["temps_h"], curve["DO_brute"], color="0.7", alpha=0.45)
+        axes[0].plot(curve["temps_h"], curve["DO_corr"], alpha=0.8, label=label)
+        axes[1].plot(curve["temps_h"], curve["Lum_brute"], color="0.7", alpha=0.45)
+        axes[1].plot(curve["temps_h"], curve["Lum_corr"], alpha=0.8, label=label)
+    axes[0].set(title="DO : brute (gris) / corrigée", xlabel="Temps (h)", ylabel="DO")
+    axes[1].set(title="Luminescence : brute (gris) / corrigée", xlabel="Temps (h)", ylabel="Luminescence (RLU)")
+    for axis in axes:
+        handles, labels = axis.get_legend_handles_labels()
+        unique = dict(zip(labels, handles))
+        axis.legend(unique.values(), unique.keys(), fontsize="small", loc="best")
+        axis.grid(alpha=0.2)
+    return figure
