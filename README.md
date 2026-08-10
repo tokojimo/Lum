@@ -5,9 +5,9 @@ quality-controlling, visualizing and statistically analyzing bacterial growth
 and luminescence plate-reader experiments. It is initially designed around
 Varioskan exports while keeping import and scientific processing extensible.
 
-> **Status:** audit-first scaffold. No legacy scripts or example workbooks were
-> present in the initial repository, so format parsing and historical numerical
-> equivalence are deliberately not claimed yet. See the [audit](docs/legacy_pipeline.md).
+> **Status:** progressive integration. The supplied synthetic scripts are being
+> integrated stage by stage. The Varioskan kinetic import and raw-data preview
+> are now available; the later processing stages remain under integration.
 
 ## Features and roadmap
 
@@ -40,8 +40,9 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The present UI is intentionally a status screen; the full interface follows
-the format and legacy-behavior audit rather than guessing scientific rules.
+Upload a Varioskan kinetic workbook, explicitly select the luminescence sheet,
+inspect the unaveraged long table and raw curves, then download the CSV used by
+the following historical stages.
 
 ## Workflow
 
@@ -165,4 +166,3 @@ experimental data or silently change legacy behavior.
 ## License
 
 LuxPlate Analyzer is available under the [MIT License](LICENSE).
-

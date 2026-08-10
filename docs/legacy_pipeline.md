@@ -2,6 +2,11 @@
 
 ## Audit scope and inventory
 
+> Update, 10 August 2026: the historical Python scripts have now been supplied
+> under `examples/synthetic/`. The inventory below records the initial audit
+> only. Integration started with `01_mise_en_forme_donnees.py`; its workbook
+> parsing and raw preview now live in `luxplate.varioskan` and the Streamlit UI.
+
 The repository was inspected recursively on 10 August 2026. At audit time it
 contained only Git administrative files and `.gitkeep`: **no Python script,
 Excel workbook, CSV export, image, or historical result was present**. There is
@@ -67,4 +72,3 @@ If a suspected defect is found, preserve and document the current result, add a
 test reproducing it, explain the scientific concern, propose a correction, and
 offer explicit `legacy` and `corrected` modes where compatibility demands it.
 Historical behavior is never changed silently.
-
