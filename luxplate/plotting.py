@@ -1,0 +1,2 @@
+"""Matplotlib scientific figure boundary."""
+

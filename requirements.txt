@@ -1,0 +1,9 @@
+streamlit>=1.37
+pandas>=2.2
+numpy>=2.0
+scipy>=1.14
+matplotlib>=3.9
+openpyxl>=3.1
+statsmodels>=0.14
+pytest>=8.2
+

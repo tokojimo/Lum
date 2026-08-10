@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.streamlit/secrets.toml
+
+# Private experimental data are intentionally excluded. Public synthetic
+# fixtures must use the explicit tests/data/synthetic directory.
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+!tests/data/synthetic/**
+!examples/synthetic/**
+analysis_export/
+
