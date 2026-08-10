@@ -55,8 +55,9 @@ def test_mixed_panels_offer_log_luminescence_and_error_bars():
     assert len(figure.axes) == 2
     assert figure.axes[0].get_yscale() == "linear"
     assert figure.axes[1].get_yscale() == "log"
-    assert figure.axes[0].get_ylabel() == r"Blank-corrected OD$_{600}$"
-    assert "Blank-corrected luminescence" in figure.axes[1].get_ylabel()
+    assert figure.axes[0].get_ylabel() == r"OD$_{600}$"
+    assert figure.axes[1].get_ylabel() == "Luminescence (RLU)"
+    assert sum(line.get_linestyle() == "--" for line in figure.axes[1].lines) == 2
     assert all(len(axis.child_axes) == 0 for axis in figure.axes)
     plt.close(figure)
 
@@ -140,6 +141,28 @@ def test_gallery_can_select_curve_families():
         plt.close(figure)
 
 
+def test_gallery_adds_pooled_recap_figures_for_multiple_experiments():
+    data = pd.concat([
+        _publication_table().assign(experience_id=f"exp{number}",
+                                    Groupe=f"Experiment {number} | DMEM (replicate)")
+        for number in (1, 2, 3)
+    ], ignore_index=True)
+
+    figures = build_publication_figures(data, families=("growth", "corrected", "mixed"))
+
+    assert [name for name, _ in figures] == [
+        "croissance", "croissance_moyenne_experiences",
+        "luminescence_corrigee", "luminescence_corrigee_moyenne_experiences",
+        "croissance_luminescence_mixte",
+    ]
+    # Each recap has one medium panel pooling all three independent experiments.
+    assert len(figures[1][1].axes) == 1
+    assert len(figures[3][1].axes) == 1
+    assert len(figures[4][1].axes) == 2  # one dual-axis medium panel
+    for _, figure in figures:
+        plt.close(figure)
+
+
 def test_nearby_technical_times_are_aligned_before_biological_summary():
     data = _publication_table()
     data.loc[data["puits"].eq("A2"), "temps_h"] += 5 / 3600
@@ -162,7 +185,7 @@ def test_metric_gallery_uses_boxplots_and_includes_peak_time():
         "temps_pic_luminescence_normalisee", "auc_luminescence_normalisee", "temps_doublement"]
     for _, figure in figures:
         assert len(figure.axes[0].patches) == 2
-        assert sum(text.get_text().startswith("mean =") for text in figure.axes[0].texts) == 2
+        assert not any(text.get_text().startswith("mean =") for text in figure.axes[0].texts)
         plt.close(figure)
 
 

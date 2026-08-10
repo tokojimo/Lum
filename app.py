@@ -155,7 +155,6 @@ with guided_tab:
                         guided_family_labels = {
                             "Croissance corrigée": "growth",
                             "Luminescence non normalisée": "corrected",
-                            "Luminescence normalisée": "normalized",
                             "Double axe DO + luminescence non normalisée": "mixed",
                             "Pic normalisé": "peak",
                             "Temps du pic normalisé": "peak_time",
@@ -166,16 +165,13 @@ with guided_tab:
                             "Figures finales", list(guided_family_labels),
                             default=list(guided_family_labels), key="guided_figure_families",
                         )
-                        guided_options = st.columns(3)
+                        guided_options = st.columns(2)
                         guided_panel_label = guided_options[0].selectbox(
                             "Organisation des panneaux", ["Panneaux par milieu", "Panneaux par souche"],
                             key="guided_figure_panels",
                         )
                         guided_lum_label = guided_options[1].selectbox(
                             "Luminescence", ["Linéaire", "Logarithmique"], key="guided_figure_lum_scale",
-                        )
-                        guided_norm_label = guided_options[2].selectbox(
-                            "Lum/DO", ["Linéaire", "Logarithmique"], key="guided_figure_norm_scale",
                         )
                         if not guided_figure_labels:
                             st.info("Sélectionnez au moins une figure finale.")
@@ -186,7 +182,6 @@ with guided_tab:
                                 families=tuple(guided_family_labels[label] for label in guided_figure_labels),
                                 panel_by="Groupe" if guided_panel_label.endswith("milieu") else "souche",
                                 lum_scale="log" if guided_lum_label == "Logarithmique" else "linear",
-                                normalized_scale="log" if guided_norm_label == "Logarithmique" else "linear",
                             )
                             for guided_name, guided_figure in guided_figures:
                                 st.subheader(guided_name.replace("_", " ").title())
@@ -513,7 +508,7 @@ with figures_tab:
     else:
         family_labels = {
             "Croissance corrigée": "growth", "Luminescence corrigée": "corrected",
-            "Luminescence normalisée": "normalized", "Double axe DO + luminescence non normalisée": "mixed",
+            "Double axe DO + luminescence non normalisée": "mixed",
             "Pic normalisé": "peak", "Temps du pic normalisé": "peak_time",
             "AUC normalisée": "auc", "Temps de doublement": "doubling",
             "Comparaisons ciblées au contrôle": "control",
@@ -521,11 +516,10 @@ with figures_tab:
         selected_labels = st.multiselect(
             "Figures à produire", list(family_labels), default=list(family_labels)
         )
-        option_columns = st.columns(4)
+        option_columns = st.columns(3)
         panel_label = option_columns[0].selectbox("Organisation des courbes", ["Panneaux par milieu", "Panneaux par souche"])
         lum_label = option_columns[1].selectbox("Échelle de luminescence", ["Linéaire", "Logarithmique"])
-        norm_label = option_columns[2].selectbox("Échelle Lum/DO", ["Linéaire", "Logarithmique"])
-        metric_label = option_columns[3].selectbox("Échelle AUC et pic", ["Logarithmique", "Linéaire"])
+        metric_label = option_columns[2].selectbox("Échelle AUC et pic", ["Logarithmique", "Linéaire"])
         uncertainty_label = st.radio(
             "Incertitude de la figure mixte", ["Barres ± SD", "Ruban ± SD"], horizontal=True
         )
@@ -545,7 +539,6 @@ with figures_tab:
                         families=tuple(family_labels[label] for label in selected_labels),
                         panel_by="Groupe" if panel_label.endswith("milieu") else "souche",
                         lum_scale="log" if lum_label == "Logarithmique" else "linear",
-                        normalized_scale="log" if norm_label == "Logarithmique" else "linear",
                         metric_scale="log" if metric_label == "Logarithmique" else "linear",
                         uncertainty="bars" if uncertainty_label.startswith("Barres") else "ribbon",
                         control=control_strain,
