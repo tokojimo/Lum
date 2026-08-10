@@ -154,9 +154,11 @@ with guided_tab:
                         )
                         guided_family_labels = {
                             "Croissance corrigée": "growth",
+                            "Luminescence non normalisée": "corrected",
                             "Luminescence normalisée": "normalized",
-                            "Double axe DO + luminescence": "mixed",
+                            "Double axe DO + luminescence non normalisée": "mixed",
                             "Pic normalisé": "peak",
+                            "Temps du pic normalisé": "peak_time",
                             "AUC normalisée": "auc",
                             "Temps de doublement": "doubling",
                         }
@@ -190,9 +192,11 @@ with guided_tab:
                                 st.subheader(guided_name.replace("_", " ").title())
                                 st.pyplot(guided_figure, use_container_width=True)
                             st.caption(
-                                "Kinetic curves show mean ± SD across technical wells. Normalized "
+                                "Les temps séparés de moins d'une minute sont alignés avant le tracé. Les puits "
+                                "techniques sont moyennés dans chaque réplicat biologique, puis les courbes montrent "
+                                "la moyenne biologique ± SD. Normalized "
                                 "luminescence is blank-corrected RLU divided by blank-corrected OD600. "
-                                "Summary bars show the mean ± SD of independent biological experiments; "
+                                "Summary boxplots show independent biological experiments and their exact mean; "
                                 "small points are technical replicates and large points are biological means. "
                                 "Statistics use biological means only (Friedman test with paired Wilcoxon "
                                 "tests and Holm correction)."
@@ -509,8 +513,9 @@ with figures_tab:
     else:
         family_labels = {
             "Croissance corrigée": "growth", "Luminescence corrigée": "corrected",
-            "Luminescence normalisée": "normalized", "Double axe DO + luminescence": "mixed",
-            "Pic normalisé": "peak", "AUC normalisée": "auc", "Temps de doublement": "doubling",
+            "Luminescence normalisée": "normalized", "Double axe DO + luminescence non normalisée": "mixed",
+            "Pic normalisé": "peak", "Temps du pic normalisé": "peak_time",
+            "AUC normalisée": "auc", "Temps de doublement": "doubling",
             "Comparaisons ciblées au contrôle": "control",
         }
         selected_labels = st.multiselect(
@@ -557,9 +562,11 @@ with figures_tab:
                 st.subheader(name.replace("_", " ").title())
                 st.pyplot(figure, use_container_width=True)
                 st.caption(
-                    "Curves: mean ± SD across technical wells. Normalized luminescence = blank-corrected "
-                    "RLU / blank-corrected OD600. Summary plots: bars are biological mean ± SD; small "
-                    "points are technical replicates and large points are biological means. Statistical "
+                    "Les temps observés à moins d'une minute sont alignés; les puits techniques sont d'abord "
+                    "moyennés par réplicat biologique, puis les courbes montrent moyenne biologique ± SD. "
+                    "Normalized luminescence = blank-corrected RLU / blank-corrected OD600. Summary plots are "
+                    "boxplots with their exact mean; small points are technical replicates and large points are "
+                    "biological means. Statistical "
                     "tests use biological means only (Friedman; paired Wilcoxon post-hoc with Holm correction)."
                 )
                 png_column, pdf_column = st.columns(2)

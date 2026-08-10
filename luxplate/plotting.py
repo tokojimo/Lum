@@ -53,6 +53,38 @@ def _strain_colors(data: pd.DataFrame) -> dict[str, str]:
             for index, strain in enumerate(strains)}
 
 
+def _aligned_biological_summary(data: pd.DataFrame, value: str,
+                                tolerance_h: float = 1 / 60) -> pd.DataFrame:
+    """Align near-identical acquisition times before biological mean ± SD.
+
+    Technical wells are first averaged inside an independent experiment/biological
+    replicate.  Times separated by at most one minute are assigned to one observed
+    timepoint, preventing a line from joining successive wells a few seconds apart.
+    No interpolation or smoothing is performed.
+    """
+    work = data.loc[data[value].notna()].copy()
+    observed = np.sort(pd.to_numeric(work["temps_h"], errors="coerce").dropna().unique())
+    if not len(observed):
+        return pd.DataFrame(columns=["temps_h", "mean", "std", "n_biological"])
+    clusters: list[list[float]] = []
+    for time in observed:
+        if not clusters or time - clusters[-1][-1] > tolerance_h:
+            clusters.append([float(time)])
+        else:
+            clusters[-1].append(float(time))
+    lookup = {time: float(np.median(cluster)) for cluster in clusters for time in cluster}
+    work["temps_aligne_h"] = pd.to_numeric(work["temps_h"]).map(lookup)
+    biological_ids = [column for column in ("experience_id", "replicat")
+                      if column in work and work[column].notna().any()]
+    # A sample header is the safest fallback when biological metadata are absent.
+    biological_ids = biological_ids or ["sample_header"]
+    biological = (work.groupby([*biological_ids, "temps_aligne_h"], dropna=False)[value]
+                   .mean().reset_index())
+    return (biological.groupby("temps_aligne_h")[value].agg(["mean", "std", "count"])
+            .rename(columns={"count": "n_biological"}).reset_index()
+            .rename(columns={"temps_aligne_h": "temps_h"}))
+
+
 def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "Groupe",
                             title: str | None = None, y_scale: str = "linear"):
     """Make one publication-style mean ± SD time-course panel per group."""
@@ -83,7 +115,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         for strain in strains:
             color = strain_colors[strain]
             strain_data = subset.loc[subset["souche"].astype(str).eq(strain)]
-            summary = strain_data.groupby("temps_h", as_index=False)[value].agg(["mean", "std"]).reset_index()
+            summary = _aligned_biological_summary(strain_data, value)
             x = summary["temps_h"].to_numpy(float); y = summary["mean"].to_numpy(float)
             sd = summary["std"].fillna(0).to_numpy(float)
             axis.errorbar(x, y, yerr=sd, color=color, lw=1.6, capsize=2,
@@ -112,14 +144,17 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
 
 
 def _mean_sd(data: pd.DataFrame, value: str) -> pd.DataFrame:
-    return data.groupby("temps_h", as_index=False)[value].agg(["mean", "std"]).reset_index()
+    return _aligned_biological_summary(data, value)
 
 
 def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
                       uncertainty: str = "bars", title: str | None = None,
-                      media: list[str] | None = None, strains: list[str] | None = None):
-    """Plot aligned OD and normalized-luminescence panels without dual y-axes."""
-    required = {"temps_h", "souche", "Groupe", "DO_corr", "Lum_norm"}
+                      media: list[str] | None = None, strains: list[str] | None = None,
+                      lum_value: str = "Lum_corr"):
+    """Plot aligned OD and luminescence on genuine dual-y-axis panels."""
+    if lum_value not in {"Lum_corr", "Lum_norm"}:
+        raise ValueError("lum_value must be 'Lum_corr' or 'Lum_norm'.")
+    required = {"temps_h", "souche", "Groupe", "DO_corr", lum_value}
     missing = required.difference(data.columns)
     if missing:
         raise ValueError(f"Missing columns for combined figure: {sorted(missing)}")
@@ -135,15 +170,16 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
         raise ValueError("No condition selected for combined figure.")
     strain_colors = _strain_colors(work)
     ncols = min(3, len(panels)); blocks = int(np.ceil(len(panels) / ncols))
-    figure, axes = plt.subplots(2 * blocks, ncols, figsize=(4.3 * ncols, 5.4 * blocks), squeeze=False)
+    figure, axes = plt.subplots(blocks, ncols, figsize=(4.5 * ncols, 3.6 * blocks), squeeze=False)
     legend_handles = []
     for panel_index, medium in enumerate(panels):
         block, column = divmod(panel_index, ncols)
-        top, bottom = axes[2 * block, column], axes[2 * block + 1, column]
+        top = axes[block, column]
+        bottom = top.twinx()
         subset = work.loc[work["Groupe"].astype(str).eq(medium)]
         for strain, strain_data in subset.groupby("souche", sort=False):
             color = strain_colors[str(strain)]
-            od = _mean_sd(strain_data, "DO_corr"); lum = _mean_sd(strain_data, "Lum_norm")
+            od = _mean_sd(strain_data, "DO_corr"); lum = _mean_sd(strain_data, lum_value)
             ox = od["temps_h"].to_numpy(float); oy = od["mean"].to_numpy(float)
             osd = od["std"].fillna(0).to_numpy(float)
             lx = lum["temps_h"].to_numpy(float); ly = lum["mean"].to_numpy(float)
@@ -166,24 +202,27 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
                     marker="s", markersize=2.3, markerfacecolor="white", capsize=2)
             if panel_index == 0: legend_handles.append(od_line)
         top.set(title=_display_panel(medium), ylabel=r"Blank-corrected OD$_{600}$")
-        bottom.set(xlabel="Time (h)", ylabel=r"Normalized luminescence (RLU/OD$_{600}$)")
-        bottom.set_yscale(lum_scale); top.tick_params(labelbottom=False)
+        top.set(xlabel="Time (h)")
+        lum_ylabel = ("Blank-corrected luminescence (RLU)" if lum_value == "Lum_corr" else
+                      r"Normalized luminescence (RLU/OD$_{600}$)")
+        bottom.set_ylabel(lum_ylabel)
+        bottom.set_yscale(lum_scale)
         top.title.set_fontweight("bold"); top.title.set_ha("left"); top.title.set_position((0, 1))
         _publication_style(top); _publication_style(bottom)
     for panel_index in range(len(panels), blocks * ncols):
         block, column = divmod(panel_index, ncols)
-        axes[2 * block, column].remove(); axes[2 * block + 1, column].remove()
+        axes[block, column].remove()
     figure.legend(legend_handles, [_display_strain(line.get_label()) for line in legend_handles], title="Reporter",
                   frameon=False, loc="upper center", bbox_to_anchor=(.5, .945),
                   ncol=min(5, len(legend_handles)))
-    figure.suptitle(title or "Growth and normalized luminescence", fontweight="bold", y=.995)
-    figure.subplots_adjust(top=.80, bottom=.11, hspace=.12, wspace=.38)
+    figure.suptitle(title or "Growth and luminescence", fontweight="bold", y=.995)
+    figure.subplots_adjust(top=.80, bottom=.13, hspace=.38, wspace=.52)
     return figure
 
 
 def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "linear",
                        title: str | None = None):
-    """Plot mean ± biological SD, technical wells, and biological means."""
+    """Plot biological distributions as boxplots with points and exact means."""
     required = {"souche", "Groupe", metric}
     missing = required.difference(metrics.columns)
     if missing: raise ValueError(f"Missing columns for metric: {sorted(missing)}")
@@ -230,15 +269,14 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         if strain not in summaries.index:
             continue
         row = summaries.loc[strain]
-        axis.bar(strain_index, row["mean"], width=.62, color=colors[strain], alpha=.28,
-                 edgecolor=colors[strain], linewidth=1, zorder=1)
-        error = 0 if pd.isna(row["std"]) else row["std"]
-        axis.plot([strain_index, strain_index], [row["mean"] - error, row["mean"] + error],
-                  color=colors[strain], lw=1.3, zorder=4)
-        axis.plot([strain_index - .05, strain_index + .05], [row["mean"] - error] * 2,
-                  color=colors[strain], lw=1.3, zorder=4)
-        axis.plot([strain_index - .05, strain_index + .05], [row["mean"] + error] * 2,
-                  color=colors[strain], lw=1.3, zorder=4)
+        biological_values = work.loc[work["souche"].astype(str).eq(strain), metric].to_numpy(float)
+        axis.boxplot([biological_values], positions=[strain_index], widths=.55, patch_artist=True,
+            showfliers=False, medianprops={"color": colors[strain], "linewidth": 1.5},
+            boxprops={"facecolor": colors[strain], "alpha": .20, "edgecolor": colors[strain]},
+            whiskerprops={"color": colors[strain]}, capprops={"color": colors[strain]})
+        mean = float(row["mean"])
+        axis.annotate(f"mean = {mean:.3g}", (strain_index, mean), xytext=(5, 5),
+                      textcoords="offset points", fontsize=7, color=colors[strain])
         raw = technical.loc[technical["souche"].astype(str).eq(strain), metric].to_numpy(float)
         axis.plot(strain_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
                   marker="o", markersize=2.8, color=colors[strain], alpha=.32, zorder=2)
@@ -262,6 +300,7 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
                     edgecolor="white", linewidth=.6, zorder=3,
                     label=" | ".join(map(str, identity)) if strain_index == 0 else None)
     metric_labels = {"lum_norm_peak": r"Peak normalized luminescence (RLU/OD$_{600}$)",
+        "lum_norm_peak_time_h": "Time of normalized luminescence peak (h)",
         "lum_norm_auc": r"Normalized luminescence AUC (RLU/OD$_{600}$)·h",
         "doubling_time_h": "Doubling time (h)"}
     axis.set_xticks(range(len(strains)), [_display_strain(s) for s in strains])
@@ -317,7 +356,8 @@ def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
 
 
 def build_publication_figures(data: pd.DataFrame, *, title: str = "",
-    families: tuple[str, ...] = ("growth", "normalized", "mixed", "peak", "auc", "doubling"),
+    families: tuple[str, ...] = ("growth", "corrected", "normalized", "mixed", "peak",
+                                "peak_time", "auc", "doubling"),
     panel_by: str = "Groupe", lum_scale: str = "linear", normalized_scale: str = "linear",
     metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux") -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
@@ -334,17 +374,19 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     if "mixed" in families:
         figures.append(("croissance_luminescence_mixte", plot_mixed_panels(
             data, lum_scale=lum_scale, uncertainty=uncertainty,
-            title="Growth and normalized luminescence")))
+            title="Growth and non-normalized luminescence", lum_value="Lum_corr")))
     metric_families = {"peak": ("lum_norm_peak", "pic_luminescence_normalisee", "Peak normalized luminescence"),
+                       "peak_time": ("lum_norm_peak_time_h", "temps_pic_luminescence_normalisee",
+                                     "Time of normalized luminescence peak"),
                        "auc": ("lum_norm_auc", "auc_luminescence_normalisee", "Normalized luminescence AUC"),
                        "doubling": ("doubling_time_h", "temps_doublement", "Doubling time")}
     requested = set(families).intersection(metric_families)
     if requested:
         metrics = run_kinetics(data).series_metrics
-        for family in ("peak", "auc", "doubling"):
+        for family in ("peak", "peak_time", "auc", "doubling"):
             if family in requested:
                 metric, suffix, figure_label = metric_families[family]
-                scale = "linear" if family == "doubling" else metric_scale
+                scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
                 figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
                     title=figure_label)))
     if "control" in families:

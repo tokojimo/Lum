@@ -15,7 +15,7 @@ from scipy.stats import friedmanchisquare, wilcoxon
 
 def paired_nonparametric_tests(
     biological: pd.DataFrame, *, value: str, condition: str = "souche",
-    identity: tuple[str, ...] = ("experience_id", "replicat"),
+    identity: tuple[str, ...] = ("experience_id", "replicat", "Groupe"),
 ) -> tuple[float, pd.DataFrame]:
     """Return a Friedman p-value and Holm-adjusted paired Wilcoxon comparisons.
 

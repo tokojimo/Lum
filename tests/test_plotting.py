@@ -56,7 +56,7 @@ def test_mixed_panels_offer_log_luminescence_and_error_bars():
     assert figure.axes[0].get_yscale() == "linear"
     assert figure.axes[1].get_yscale() == "log"
     assert figure.axes[0].get_ylabel() == r"Blank-corrected OD$_{600}$"
-    assert "Normalized luminescence" in figure.axes[1].get_ylabel()
+    assert "Blank-corrected luminescence" in figure.axes[1].get_ylabel()
     assert all(len(axis.child_axes) == 0 for axis in figure.axes)
     plt.close(figure)
 
@@ -137,6 +137,32 @@ def test_gallery_can_select_curve_families():
     )
     assert [name for name, _ in figures] == ["croissance", "croissance_luminescence_mixte"]
     for _, figure in figures:
+        plt.close(figure)
+
+
+def test_nearby_technical_times_are_aligned_before_biological_summary():
+    data = _publication_table()
+    data.loc[data["puits"].eq("A2"), "temps_h"] += 5 / 3600
+
+    figure = plot_publication_panels(data, value="DO_corr")
+
+    # One curve per strain, with the three planned acquisition times rather than
+    # six successively connected well times (the source of artificial saw teeth).
+    reporter_lines = [container.lines[0] for container in figure.axes[0].containers
+                      if container.get_label() in {"P0-lux", "Reporter-lux"}]
+    assert len(reporter_lines) == 2
+    assert all(len(line.get_xdata()) == 3 for line in reporter_lines)
+    plt.close(figure)
+
+
+def test_metric_gallery_uses_boxplots_and_includes_peak_time():
+    figures = build_publication_figures(_publication_table(), families=("peak", "peak_time", "auc", "doubling"),
+                                        metric_scale="linear")
+    assert [name for name, _ in figures] == ["pic_luminescence_normalisee",
+        "temps_pic_luminescence_normalisee", "auc_luminescence_normalisee", "temps_doublement"]
+    for _, figure in figures:
+        assert len(figure.axes[0].patches) == 2
+        assert sum(text.get_text().startswith("mean =") for text in figure.axes[0].texts) == 2
         plt.close(figure)
 
 
