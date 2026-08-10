@@ -2,7 +2,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from luxplate.plotting import (build_guided_raw_figures, build_publication_figures,
-                               plot_kinetics, plot_mixed_panels, plot_publication_panels)
+                               plot_kinetics, plot_metric_points, plot_mixed_panels,
+                               plot_publication_panels)
 from test_workflow import workflow_table
 
 
@@ -43,6 +44,8 @@ def test_publication_panels_accept_log_scale_and_strain_panels():
     )
     assert len(figure.axes) == 2
     assert all(axis.get_yscale() == "log" for axis in figure.axes)
+    assert all(axis.get_xlabel() == "Time (h)" for axis in figure.axes)
+    assert all("Normalized luminescence" in axis.get_ylabel() for axis in figure.axes)
     plt.close(figure)
 
 
@@ -51,6 +54,46 @@ def test_mixed_panels_offer_log_luminescence_and_error_bars():
     assert len(figure.axes) == 2
     assert figure.axes[0].get_yscale() == "linear"
     assert figure.axes[1].get_yscale() == "log"
+    assert figure.axes[0].get_ylabel() == r"Blank-corrected OD$_{600}$"
+    assert "Normalized luminescence" in figure.axes[1].get_ylabel()
+    assert all(len(axis.child_axes) == 0 for axis in figure.axes)
+    plt.close(figure)
+
+
+def test_metric_points_average_technical_series_per_independent_experiment():
+    metrics = pd.DataFrame([
+        {"souche": strain, "Groupe": "SCFM2", "experience_id": experiment,
+         "replicat": 1, "lum_norm_auc": value + technical}
+        for experiment, value in (("exp1", 10.0), ("exp2", 20.0))
+        for strain in ("P0-lux", "Reporter-lux")
+        for technical in (0.0, 2.0, 4.0)
+    ])
+
+    figure = plot_metric_points(metrics, metric="lum_norm_auc", y_scale="log")
+
+    points = [collection for collection in figure.axes[0].collections if len(collection.get_offsets())]
+    assert len(points) == 4
+    assert sorted(float(collection.get_offsets()[0, 1]) for collection in points) == [12, 12, 22, 22]
+    assert figure.axes[0].get_legend().get_title().get_text() == "Independent experiment"
+    plt.close(figure)
+
+
+def test_metric_points_fall_back_to_linear_when_log_data_are_nonpositive():
+    metrics = pd.DataFrame([
+        {"souche": "P0-lux", "Groupe": "SCFM2", "experience_id": "exp1",
+         "replicat": 1, "lum_norm_auc": 0},
+        {"souche": "Reporter-lux", "Groupe": "SCFM2", "experience_id": "exp1",
+         "replicat": 1, "lum_norm_auc": -2},
+    ])
+
+    figure = plot_metric_points(metrics, metric="lum_norm_auc", y_scale="log")
+
+    axis = figure.axes[0]
+    assert axis.get_yscale() == "linear"
+    assert [text.get_text() for text in axis.texts] == [
+        "Log scale unavailable: no positive values"
+    ]
+    assert sorted(float(point.get_offsets()[0, 1]) for point in axis.collections) == [-2, 0]
     plt.close(figure)
 
 
