@@ -70,3 +70,27 @@ def plot_blank_correction(data: pd.DataFrame):
         axis.legend(unique.values(), unique.keys(), fontsize="small", loc="best")
         axis.grid(alpha=0.2)
     return figure
+
+
+def plot_normalization(data: pd.DataFrame):
+    """Compare corrected and OD-normalized luminescence for strain series."""
+    required = {"temps_h", "souche", "sample_header", "type", "Lum_corr", "Lum_norm"}
+    missing = required.difference(data.columns)
+    if missing:
+        raise ValueError(f"Colonnes manquantes pour la figure : {sorted(missing)}")
+    strains = data.loc[data["type"].eq("souche")]
+    figure, axes = plt.subplots(1, 2, figsize=(12, 4.5), constrained_layout=True)
+    for _, curve in strains.groupby("sample_header", sort=False):
+        curve = curve.sort_values("temps_h")
+        label = str(curve["souche"].iloc[0])
+        axes[0].plot(curve["temps_h"], curve["Lum_corr"], alpha=0.8, label=label)
+        axes[1].plot(curve["temps_h"], curve["Lum_norm"], alpha=0.8, label=label)
+    axes[0].set(title="Luminescence corrigée", xlabel="Temps (h)", ylabel="Luminescence (RLU)")
+    axes[1].set(title="Luminescence normalisée par la DO", xlabel="Temps (h)", ylabel="Lum_corr / DO_corr")
+    for axis in axes:
+        handles, labels = axis.get_legend_handles_labels()
+        unique = dict(zip(labels, handles))
+        if unique:
+            axis.legend(unique.values(), unique.keys(), fontsize="small", loc="best")
+        axis.grid(alpha=0.2)
+    return figure
