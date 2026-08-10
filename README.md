@@ -94,6 +94,17 @@ After an explicitly validated blank association, normalization is
 valid points. These parameters will remain visible and configurable. Missing
 values are never replaced by zero.
 
+Kinetic series use every available identity component among `experience_id`,
+`souche`, `Groupe`, `sample_header`, `puits`, and `replicat`, so conditions,
+wells, biological replicates, and experiments are never silently
+merged. AUC uses every finite point and therefore spans temporal gaps. Duplicate
+times are traceable warnings: they interrupt growth windows but do not discard
+otherwise computable peak and AUC metrics. Maximum growth is the greatest slope
+of `log(DO_corr)` over consecutive point windows, fitted against the actual times.
+The point count, minimum duration and minimum R² are configurable; R² and an
+explicit non-publication reason accompany every result. Technical summaries keep
+`replicat` separate pending confirmation that it denotes a biological replicate.
+
 ## Statistical analysis
 
 The independent unit is `biological_replicate_id`, not a technical well.

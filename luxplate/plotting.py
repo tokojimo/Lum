@@ -94,3 +94,39 @@ def plot_normalization(data: pd.DataFrame):
             axis.legend(unique.values(), unique.keys(), fontsize="small", loc="best")
         axis.grid(alpha=0.2)
     return figure
+
+
+def plot_kinetics(data: pd.DataFrame, series_metrics: pd.DataFrame):
+    """Plot each well and annotate OD/normalized-luminescence kinetic landmarks."""
+    required = {"temps_h", "sample_header", "DO_corr", "Lum_norm"}
+    missing = required.difference(data.columns)
+    if missing:
+        raise ValueError(f"Colonnes manquantes pour la figure : {sorted(missing)}")
+    figure, axes = plt.subplots(1, 2, figsize=(12, 4.5), constrained_layout=True)
+    group_columns = [column for column in
+                     ("experience_id", "souche", "Groupe", "sample_header", "puits", "replicat")
+                     if column in data]
+    for keys, curve in data.groupby(group_columns, dropna=False, sort=False):
+        curve = curve.sort_values("temps_h", kind="stable")
+        keys = keys if isinstance(keys, tuple) else (keys,)
+        identity = dict(zip(group_columns, keys))
+        label = " · ".join(str(identity[column]) for column in group_columns)
+        axes[0].plot(curve["temps_h"], curve["DO_corr"], marker="o", markersize=2, label=label)
+        axes[1].plot(curve["temps_h"], curve["Lum_norm"], marker="o", markersize=2, label=label)
+        selected = series_metrics
+        for column, value in identity.items():
+            selected = selected.loc[selected[column].eq(value)]
+        if selected.empty:
+            continue
+        metric = selected.iloc[0]
+        axes[0].scatter(metric["od_max_time_h"], metric["od_max"], marker="*", s=90, zorder=5)
+        axes[1].scatter(metric["lum_norm_peak_time_h"], metric["lum_norm_peak"], marker="*", s=90, zorder=5)
+        if pd.notna(metric["max_growth_rate_start_h"]):
+            axes[0].axvspan(metric["max_growth_rate_start_h"], metric["max_growth_rate_end_h"],
+                            alpha=0.10, color="green")
+    axes[0].set(title="Croissance et fenêtre maximale", xlabel="Temps (h)", ylabel="DO corrigée")
+    axes[1].set(title="Luminescence et pic", xlabel="Temps (h)", ylabel="Luminescence normalisée")
+    for axis in axes:
+        axis.grid(alpha=0.2)
+        axis.legend(fontsize="x-small", loc="best")
+    return figure

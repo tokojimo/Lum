@@ -8,7 +8,9 @@ import streamlit as st
 
 from luxplate.blanks import run_blank_correction
 from luxplate.normalization import run_normalization
-from luxplate.plotting import plot_blank_correction, plot_normalization, plot_qc_curves, plot_raw_curves
+from luxplate.kinetics import run_kinetics
+from luxplate.plotting import (plot_blank_correction, plot_kinetics, plot_normalization,
+                               plot_qc_curves, plot_raw_curves)
 from luxplate.qc import run_quality_control
 from luxplate.varioskan import inspect_workbook, parse_kinetic_workbook
 
@@ -16,8 +18,9 @@ st.set_page_config(page_title="LuxPlate Analyzer", page_icon="🧫", layout="wid
 st.title("LuxPlate Analyzer")
 st.caption("Du classeur Varioskan brut aux données contrôlées, analysées et visualisées.")
 
-import_tab, qc_tab, blanks_tab, normalization_tab = st.tabs(
-    ["1 · Import et mise en forme", "2 · Contrôle qualité", "3 · Correction des blancs", "4 · Normalisation par la DO"]
+import_tab, qc_tab, blanks_tab, normalization_tab, kinetics_tab = st.tabs(
+    ["1 · Import et mise en forme", "2 · Contrôle qualité", "3 · Correction des blancs",
+     "4 · Normalisation par la DO", "5 · Paramètres cinétiques"]
 )
 
 with import_tab:
@@ -40,7 +43,8 @@ with import_tab:
             data = parse_kinetic_workbook(BytesIO(payload), selected_luminescence)
             previous_source = st.session_state.get("source_payload")
             if previous_source != payload:
-                for key in ("qc_journal", "validated_qc_journal", "qc_validated", "blank_correction_result"):
+                for key in ("qc_journal", "validated_qc_journal", "qc_validated",
+                            "blank_correction_result", "normalization_result"):
                     st.session_state.pop(key, None)
             st.session_state["source_payload"] = payload
             st.session_state["long_data"] = data
@@ -168,6 +172,7 @@ with blanks_tab:
         except ValueError as error:
             st.error(f"Correction des blancs impossible : {error}")
         else:
+            st.session_state["normalization_result"] = normalization
             st.session_state["blank_correction_result"] = correction
             metrics = dict(zip(correction.summary["metrique"], correction.summary["valeur"]))
             col1, col2, col3, col4 = st.columns(4)
@@ -260,6 +265,51 @@ with normalization_tab:
                 column.download_button(label, table.to_csv(index=False).encode("utf-8-sig"),
                                        file_name=f"{base}_{suffix}.csv", mime="text/csv")
 
+with kinetics_tab:
+    st.header("5 · Paramètres cinétiques")
+    if "normalization_result" not in st.session_state:
+        st.info("Exécutez d'abord la normalisation dans l'onglet 4.")
+    else:
+        parameters = st.columns(4)
+        window = parameters[0].number_input("Points par fenêtre", min_value=2, value=3, step=1)
+        duration = parameters[1].number_input("Durée minimale (h)", min_value=0.0, value=0.0, step=0.1)
+        r_squared = parameters[2].number_input("R² minimal", min_value=0.0, max_value=1.0,
+                                               value=0.0, step=0.05)
+        auc_points = parameters[3].number_input("Points minimum pour l'AUC", min_value=2, value=2, step=1)
+        try:
+            kinetics = run_kinetics(
+                st.session_state["normalization_result"].normalized_data,
+                growth_window_points=int(window), minimum_auc_points=int(auc_points),
+                growth_window_min_duration_h=float(duration), growth_rate_min_r_squared=float(r_squared),
+            )
+        except ValueError as error:
+            st.error(f"Extraction cinétique impossible : {error}")
+        else:
+            counters = dict(zip(kinetics.summary["metric"], kinetics.summary["value"]))
+            cards = st.columns(3)
+            cards[0].metric("Séries analysées", int(counters["series_analyzed"]))
+            cards[1].metric("Séries rejetées", int(counters["series_rejected"]))
+            cards[2].metric("Avertissements", int(counters["warnings"]))
+            metrics_tab, technical_tab, rejected_tab, warnings_tab, summary_tab, curves_tab = st.tabs([
+                "Métriques par série", "Résumé technique", "Séries rejetées", "Avertissements",
+                "Résumé d'exécution", "Courbes annotées",
+            ])
+            tables = [kinetics.series_metrics, kinetics.strain_summary, kinetics.rejected_series,
+                      kinetics.warnings, kinetics.summary]
+            for tab, table in zip((metrics_tab, technical_tab, rejected_tab, warnings_tab, summary_tab), tables):
+                with tab:
+                    st.dataframe(table, use_container_width=True, hide_index=True)
+            with curves_tab:
+                st.pyplot(plot_kinetics(st.session_state["normalization_result"].normalized_data,
+                                        kinetics.series_metrics), use_container_width=True)
+            base = st.session_state.get("source_name", "experience")
+            labels = ("metriques_series", "resume_technique", "series_rejetees", "avertissements", "resume")
+            export_columns = st.columns(5)
+            for column, table, suffix in zip(export_columns, tables, labels):
+                column.download_button(suffix.replace("_", " ").title(),
+                    table.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"{base}_cinetique_{suffix}.csv", mime="text/csv")
+
 st.divider()
 st.subheader("Étapes suivantes")
-st.write("Paramètres cinétiques → statistiques et figures.")
+st.write("Statistiques biologiques → figures finales.")
