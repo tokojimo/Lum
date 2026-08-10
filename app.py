@@ -231,7 +231,7 @@ with import_tab:
             previous_source = st.session_state.get("source_identity")
             if previous_source != source_identity:
                 for key in ("qc_journal", "validated_qc_journal", "qc_validated",
-                            "blank_correction_result", "normalization_result"):
+                            "blank_correction_result", "normalization_result", "publication_export"):
                     st.session_state.pop(key, None)
             st.session_state["source_identity"] = source_identity
             st.session_state["long_data"] = data
@@ -523,6 +523,20 @@ with figures_tab:
         uncertainty_label = st.radio(
             "Incertitude de la figure mixte", ["Barres ± SD", "Ruban ± SD"], horizontal=True
         )
+        with st.expander("Pourquoi Friedman plutôt qu'une ANOVA ou un test t ?"):
+            st.markdown(
+                "Les mêmes expériences biologiques mesurent plusieurs promoteurs : les observations sont donc "
+                "**appariées**. Friedman compare au moins trois promoteurs sans supposer une distribution normale, "
+                "ce qui est prudent avec peu de réplicats. Une ANOVA à mesures répétées demanderait notamment des "
+                "résidus approximativement normaux; un test t ne compare que deux promoteurs et suppose la normalité "
+                "des différences. Après Friedman, les paires sont comparées par Wilcoxon apparié et la correction de "
+                "Holm limite les faux positifs dus aux comparaisons multiples. Avec seulement deux promoteurs, "
+                "Friedman n'est pas calculé : seul Wilcoxon est pertinent."
+            )
+        export_dpi = st.select_slider(
+            "Qualité des exports PNG et TIFF (dpi)", options=[150, 300, 600], value=600,
+            help="SVG et PDF restent vectoriels, quelle que soit cette valeur.",
+        )
         available_strains = sorted(
             st.session_state["normalization_result"].normalized_data["souche"].dropna().astype(str).unique()
         )
@@ -543,11 +557,17 @@ with figures_tab:
                         uncertainty="bars" if uncertainty_label.startswith("Barres") else "ribbon",
                         control=control_strain,
                     )
-                    rendered, archive = package_figures(figures, dpi=600)
-                    st.session_state["publication_export"] = (figures, rendered, archive)
+                    rendered, archive = package_figures(figures, dpi=export_dpi)
+                    st.session_state["publication_export"] = (figures, rendered, archive, export_dpi)
         if "publication_export" in st.session_state:
-            figures, rendered, archive = st.session_state["publication_export"]
-            st.success(f"{len(rendered)} figure(s) préparée(s), dans deux formats chacune.")
+            # A session can survive a deployment/git pull.  Never reuse an export
+            # produced by an older schema (which previously stored three items).
+            if len(st.session_state["publication_export"]) != 4:
+                st.session_state.pop("publication_export")
+                st.info("La galerie en cache provenait d'une ancienne version; préparez-la à nouveau.")
+                st.stop()
+            figures, rendered, archive, rendered_dpi = st.session_state["publication_export"]
+            st.success(f"{len(rendered)} figure(s) préparée(s), dans quatre formats chacune.")
             st.download_button("Télécharger toutes les figures (.zip)", archive,
                                file_name=f"{st.session_state.get('source_name', 'analyse')}_figures.zip",
                                mime="application/zip", type="primary")
@@ -562,9 +582,15 @@ with figures_tab:
                     "biological means. Statistical "
                     "tests use biological means only (Friedman; paired Wilcoxon post-hoc with Holm correction)."
                 )
-                png_column, pdf_column = st.columns(2)
+                png_column, tiff_column, svg_column, pdf_column = st.columns(4)
                 png_column.download_button(
-                    "PNG · 600 dpi", item.png, f"{item.name}.png", "image/png", key=f"png_{item.name}"
+                    f"PNG · {rendered_dpi} dpi", item.png, f"{item.name}.png", "image/png", key=f"png_{item.name}"
+                )
+                tiff_column.download_button(
+                    f"TIFF · {rendered_dpi} dpi", item.tiff, f"{item.name}.tiff", "image/tiff", key=f"tiff_{item.name}"
+                )
+                svg_column.download_button(
+                    "SVG · vectoriel", item.svg, f"{item.name}.svg", "image/svg+xml", key=f"svg_{item.name}"
                 )
                 pdf_column.download_button(
                     "PDF · vectoriel", item.pdf, f"{item.name}.pdf", "application/pdf", key=f"pdf_{item.name}"

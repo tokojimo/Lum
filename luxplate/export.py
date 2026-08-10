@@ -21,6 +21,8 @@ class FigureFile:
 
     name: str
     png: bytes
+    tiff: bytes
+    svg: bytes
     pdf: bytes
 
 
@@ -34,26 +36,33 @@ def safe_filename(value: object) -> str:
 def figure_bytes(figure: Figure, format: str, *, dpi: int = 600) -> bytes:
     """Serialize a figure with the tight, white layout used by example scripts."""
     output = BytesIO()
+    metadata = {"Creator": "LuxPlate Analyzer"} if format in {"png", "pdf", "svg"} else None
     figure.savefig(
         output, format=format, dpi=dpi, bbox_inches="tight", pad_inches=0.03,
-        facecolor="white", metadata={"Creator": "LuxPlate Analyzer"},
+        facecolor="white", metadata=metadata,
     )
     return output.getvalue()
 
 
 def package_figures(figures: list[tuple[str, Figure]], *, dpi: int = 600) -> tuple[list[FigureFile], bytes]:
-    """Render figures to PNG/PDF and return both files and a single ZIP archive."""
+    """Render figures to raster and vector formats and return a ZIP archive."""
     rendered: list[FigureFile] = []
     archive = BytesIO()
     with ZipFile(archive, "w", compression=ZIP_DEFLATED) as bundle:
         for name, figure in figures:
             stem = safe_filename(Path(name).stem)
-            item = FigureFile(stem, figure_bytes(figure, "png", dpi=dpi), figure_bytes(figure, "pdf", dpi=dpi))
+            item = FigureFile(stem, figure_bytes(figure, "png", dpi=dpi),
+                              figure_bytes(figure, "tiff", dpi=dpi),
+                              figure_bytes(figure, "svg", dpi=dpi),
+                              figure_bytes(figure, "pdf", dpi=dpi))
             rendered.append(item)
             bundle.writestr(f"PNG/{stem}.png", item.png)
+            bundle.writestr(f"TIFF/{stem}.tiff", item.tiff)
+            bundle.writestr(f"SVG/{stem}.svg", item.svg)
             bundle.writestr(f"PDF/{stem}.pdf", item.pdf)
         bundle.writestr(
             "LISEZ_MOI.txt",
-            "Figures LuxPlate prêtes pour publication.\nPNG : image 600 dpi.\nPDF : format vectoriel éditable.\n",
+            f"Figures LuxPlate prêtes pour publication.\nPNG et TIFF : images {dpi} dpi.\n"
+            "SVG et PDF : formats vectoriels éditables.\n",
         )
     return rendered, archive.getvalue()
