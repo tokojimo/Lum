@@ -217,10 +217,14 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
     ncols = min(3, len(panels)); blocks = int(np.ceil(len(panels) / ncols))
     figure, axes = plt.subplots(blocks, ncols, figsize=(4.5 * ncols, 3.6 * blocks), squeeze=False)
     legend_handles = []
+    od_axes = []
+    lum_axes = []
     for panel_index, medium in enumerate(panels):
         block, column = divmod(panel_index, ncols)
         top = axes[block, column]
         bottom = top.twinx()
+        od_axes.append(top)
+        lum_axes.append(bottom)
         subset = work.loc[work["Groupe"].astype(str).eq(medium)]
         for strain, strain_data in subset.groupby("souche", sort=False):
             color = strain_colors[str(strain)]
@@ -260,6 +264,14 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
             _scientific_rlu_axis(bottom)
         top.title.set_fontweight("bold"); top.title.set_ha("left"); top.title.set_position((0, 1))
         _publication_style(top); _publication_style(bottom)
+    # A dual-axis figure is only comparable across media when each measurement
+    # uses one common range.  Sharing cannot be requested directly here because
+    # the luminescence axes are created with ``twinx`` after the OD grid.
+    for measurement_axes in (od_axes, lum_axes):
+        limits = np.asarray([axis.get_ylim() for axis in measurement_axes], dtype=float)
+        shared_limits = (float(np.nanmin(limits[:, 0])), float(np.nanmax(limits[:, 1])))
+        for axis in measurement_axes:
+            axis.set_ylim(shared_limits)
     for panel_index in range(len(panels), blocks * ncols):
         block, column = divmod(panel_index, ncols)
         axes[block, column].remove()
@@ -278,129 +290,155 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
     return figure
 
 
-def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "linear",
-                       title: str | None = None):
-    """Plot biological distributions as boxplots with points and exact means."""
-    required = {"souche", "Groupe", metric}
-    missing = required.difference(metrics.columns)
-    if missing: raise ValueError(f"Missing columns for metric: {sorted(missing)}")
-    if y_scale not in {"linear", "log"}:
-        raise ValueError("Scale must be 'linear' or 'log'.")
-    # Treat infinities like missing measurements.  In particular, ``+inf``
-    # passes a simple ``> 0`` check but does not give Matplotlib a finite
-    # positive bound for a logarithmic axis, causing LogLocator to fail during
-    # layout with "Data cannot be log-scaled".
-    numeric_metric = pd.to_numeric(metrics[metric], errors="coerce").replace(
-        [np.inf, -np.inf], np.nan
-    )
-    work = metrics.loc[numeric_metric.notna()].copy()
-    work[metric] = numeric_metric.loc[work.index]
-    effective_scale = y_scale
-    if y_scale == "log":
-        positive = work[metric].gt(0)
-        if positive.any():
-            work = work.loc[positive]
-        else:
-            # Matplotlib cannot lay out an empty/non-positive logarithmic axis.
-            # Retain the available observations on a linear axis instead of
-            # crashing the complete publication-figure gallery.
-            effective_scale = "linear"
-    strains = list(dict.fromkeys(work["souche"].astype(str)))
-    # Some exports include an ``experience_id`` column even though it is wholly
-    # empty.  Such a column is metadata, not a usable biological identifier:
-    # comparing its NaN identity with ``Series.eq`` would select no rows and
-    # leave the axis without points.  Prefer only identifiers that contain at
-    # least one real value, falling back to the condition below when necessary.
-    biological_columns = [
-        column for column in ("experience_id", "replicat")
-        if column in work and work[column].notna().any()
-    ]
-    group_columns = ["souche", "Groupe", *biological_columns]
-    technical = work.copy()
-    work = work.groupby(group_columns, dropna=False, sort=False)[metric].mean().reset_index()
-    biological_columns = biological_columns or ["Groupe"]
-    figure, axis = plt.subplots(figsize=(max(6, 1.15 * len(strains)), 4.5))
-    rng = np.random.default_rng(1947)
-    colors = _strain_colors(work)
-    summaries = work.groupby("souche", sort=False)[metric].agg(["mean", "std"])
-    for strain_index, strain in enumerate(strains):
-        if strain not in summaries.index:
-            continue
-        row = summaries.loc[strain]
-        biological_values = work.loc[work["souche"].astype(str).eq(strain), metric].to_numpy(float)
-        axis.boxplot([biological_values], positions=[strain_index], widths=.55, patch_artist=True,
-            showfliers=False, medianprops={"color": colors[strain], "linewidth": 1.5},
-            boxprops={"facecolor": colors[strain], "alpha": .20, "edgecolor": colors[strain]},
-            whiskerprops={"color": colors[strain]}, capprops={"color": colors[strain]})
-        mean = float(row["mean"])
-        raw = technical.loc[technical["souche"].astype(str).eq(strain), metric].to_numpy(float)
-        # Put the exact mean above the strain's highest observation: the label
-        # remains legible and never sits inside the box or on top of a point.
-        highest = float(np.nanmax(np.concatenate([biological_values, raw])))
-        axis.annotate(f"{mean:.3g}", (strain_index, highest), xytext=(0, 7),
-                      ha="center", va="bottom", textcoords="offset points",
-                      fontsize=7, color=colors[strain])
-        axis.plot(strain_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
-                  marker="o", markersize=2.8, color=colors[strain], alpha=.32, zorder=2)
-    identities = list(work[biological_columns].drop_duplicates().itertuples(index=False, name=None))
-    for identity_index, identity in enumerate(identities):
-        mask = np.ones(len(work), dtype=bool)
-        for column, value in zip(biological_columns, identity):
-            # ``NaN != NaN``; explicitly match missing identities so partially
-            # populated identifier columns cannot silently discard observations.
-            matches = work[column].isna() if pd.isna(value) else work[column].eq(value)
+def _significance_stars(p_value: float) -> str:
+    """Return the conventional significance symbol for an adjusted p-value."""
+    if p_value < .0001:
+        return "****"
+    if p_value < .001:
+        return "***"
+    if p_value < .01:
+        return "**"
+    if p_value < .05:
+        return "*"
+    return "ns"
+
+
+def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, *,
+                       metric: str, condition: str, y_scale: str, panel_title: str,
+                       seed: int) -> pd.DataFrame:
+    """Draw one metric panel and return its pairwise statistics."""
+    conditions = list(dict.fromkeys(biological[condition].astype(str)))
+    colors = _strain_colors(biological) if condition == "souche" else {
+        item: PUBLICATION_COLORS[index % len(PUBLICATION_COLORS)]
+        for index, item in enumerate(conditions)
+    }
+    rng = np.random.default_rng(seed)
+    summaries = biological.groupby(condition, sort=False)[metric].agg(["mean", "std"])
+    for condition_index, item in enumerate(conditions):
+        values = biological.loc[biological[condition].astype(str).eq(item), metric].to_numpy(float)
+        raw = technical.loc[technical[condition].astype(str).eq(item), metric].to_numpy(float)
+        color = colors[item]
+        axis.boxplot([values], positions=[condition_index], widths=.55, patch_artist=True,
+            showfliers=False, medianprops={"color": color, "linewidth": 1.5},
+            boxprops={"facecolor": color, "alpha": .20, "edgecolor": color},
+            whiskerprops={"color": color}, capprops={"color": color})
+        highest = float(np.nanmax(np.concatenate([values, raw])))
+        axis.annotate(f"{float(summaries.loc[item, 'mean']):.3g}", (condition_index, highest),
+                      xytext=(0, 7), ha="center", va="bottom", textcoords="offset points",
+                      fontsize=7, color=color)
+        axis.plot(condition_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
+                  marker="o", markersize=2.8, color=color, alpha=.32, zorder=2)
+
+    identity_columns = [column for column in ("experience_id", "replicat")
+                        if column in biological and biological[column].notna().any()]
+    identity_columns = identity_columns or (["Groupe"] if condition == "souche" else ["souche"])
+    for identity in biological[identity_columns].drop_duplicates().itertuples(index=False, name=None):
+        mask = np.ones(len(biological), dtype=bool)
+        for column, value in zip(identity_columns, identity):
+            matches = biological[column].isna() if pd.isna(value) else biological[column].eq(value)
             mask &= matches.to_numpy()
-        subset = work.loc[mask]
-        xs, ys = [], []
-        for strain_index, strain in enumerate(strains):
-            values = subset.loc[subset["souche"].astype(str).eq(strain), metric].to_numpy(float)
+        subset = biological.loc[mask]
+        for condition_index, item in enumerate(conditions):
+            values = subset.loc[subset[condition].astype(str).eq(item), metric].to_numpy(float)
             if len(values):
-                x = strain_index + rng.uniform(-.025, .025)
-                xs.append(x); ys.append(values[0])
-                axis.scatter(x, values[0], s=48, marker="o",
-                    color=colors[strain],
-                    edgecolor="white", linewidth=.6, zorder=3,
-                    label=" | ".join(map(str, identity)) if strain_index == 0 else None)
+                axis.scatter(condition_index + rng.uniform(-.025, .025), values[0], s=48,
+                    marker="o", color=colors[item], edgecolor="white", linewidth=.6, zorder=3)
+
     metric_labels = {"lum_norm_peak": r"Peak normalized luminescence (RLU/OD$_{600}$)",
         "lum_norm_peak_time_h": "Time of normalized luminescence peak (h)",
         "lum_norm_auc": r"Normalized luminescence AUC (RLU/OD$_{600}$)·h",
         "doubling_time_h": "Doubling time (h)"}
-    axis.set_xticks(range(len(strains)), [_display_strain(s) for s in strains])
-    axis.set(xlabel="Reporter", ylabel=metric_labels.get(metric, metric), title=title or metric_labels.get(metric, metric))
-    axis.set_yscale(effective_scale)
-    # Reserve a clear annotation band above every mean label and data point.
+    axis.set_xticks(range(len(conditions)), [(_display_strain(item) if condition == "souche" else
+                                              _display_panel(item)) for item in conditions])
+    axis.set(xlabel="Reporter" if condition == "souche" else "Medium",
+             ylabel=metric_labels.get(metric, metric), title=panel_title)
+    axis.set_yscale(y_scale)
     axis.margins(y=.30)
-    axis.title.set_fontweight("bold"); _publication_style(axis)
-    omnibus, comparisons = paired_nonparametric_tests(work, value=metric)
-    strain_positions = {strain: index for index, strain in enumerate(strains)}
-    usable = comparisons.loc[
-        comparisons["condition_1"].isin(strain_positions)
-        & comparisons["condition_2"].isin(strain_positions)
-    ]
+    axis.title.set_fontweight("bold"); axis.title.set_ha("left"); axis.title.set_position((0, 1))
+    _publication_style(axis)
+
+    omnibus, comparisons = paired_nonparametric_tests(
+        biological, value=metric, condition=condition,
+        identity=tuple(identity_columns),
+    )
+    positions = {item: index for index, item in enumerate(conditions)}
+    usable = comparisons.loc[comparisons["condition_1"].isin(positions)
+                             & comparisons["condition_2"].isin(positions)]
     transform = blended_transform_factory(axis.transData, axis.transAxes)
     spacing = min(.055, .15 / max(1, len(usable)))
     for level, comparison in enumerate(usable.itertuples(index=False), start=1):
-        left = strain_positions[comparison.condition_1]
-        right = strain_positions[comparison.condition_2]
+        left, right = positions[comparison.condition_1], positions[comparison.condition_2]
         y = .82 + spacing * level
         p = comparison.p_holm
-        p_label = "pHolm < 0.0001" if p < .0001 else f"pHolm = {p:.3g}"
+        value_label = "< 0.0001" if p < .0001 else f"= {p:.3g}"
+        p_label = f"Pvalue {value_label} {_significance_stars(p)}"
         axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
                   transform=transform, color="#333333", lw=.7, clip_on=False)
         axis.text((left + right) / 2, y + .006, p_label, transform=transform,
                   ha="center", va="bottom", fontsize=7)
-    axis.text(.99, .01, "Overall Friedman test: " + (f"p = {omnibus:.3g}" if np.isfinite(omnibus) else "not estimable"),
+    axis.text(.99, .01, "Overall Friedman test: " +
+              (f"p = {omnibus:.3g}" if np.isfinite(omnibus) else "not estimable"),
               transform=axis.transAxes, ha="right", va="bottom", fontsize=7, color="#555555")
-    axis.legend(handles=[
+    return comparisons
+
+
+def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "linear",
+                       title: str | None = None, group_by: str | None = None):
+    """Plot metric distributions, optionally with one panel per medium or strain."""
+    required = {"souche", "Groupe", metric}
+    if group_by is not None:
+        required.add(group_by)
+    missing = required.difference(metrics.columns)
+    if missing:
+        raise ValueError(f"Missing columns for metric: {sorted(missing)}")
+    if y_scale not in {"linear", "log"}:
+        raise ValueError("Scale must be 'linear' or 'log'.")
+    numeric = pd.to_numeric(metrics[metric], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    technical = metrics.loc[numeric.notna()].copy()
+    technical[metric] = numeric.loc[technical.index]
+    effective_scale = y_scale
+    if y_scale == "log":
+        if technical[metric].gt(0).any():
+            technical = technical.loc[technical[metric].gt(0)]
+        else:
+            effective_scale = "linear"
+
+    biological_ids = [column for column in ("experience_id", "replicat")
+                      if column in technical and technical[column].notna().any()]
+    group_columns = ["souche", "Groupe", *biological_ids]
+    biological = technical.groupby(group_columns, dropna=False, sort=False)[metric].mean().reset_index()
+    panels = ([None] if group_by is None else
+              list(dict.fromkeys(biological[group_by].dropna().astype(str))))
+    if not panels:
+        raise ValueError("No usable data available for the metric figure.")
+    condition = "Groupe" if group_by == "souche" else "souche"
+    ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
+    figure, axes = plt.subplots(nrows, ncols, figsize=(max(6, 4.3 * ncols), 4.5 * nrows), squeeze=False)
+    all_statistics = []
+    for index, panel in enumerate(panels):
+        panel_technical = technical if panel is None else technical.loc[technical[group_by].astype(str).eq(panel)]
+        panel_biological = biological if panel is None else biological.loc[biological[group_by].astype(str).eq(panel)]
+        panel_title = (title or metric) if panel is None else _display_panel(panel)
+        statistics = _draw_metric_panel(axes.flat[index], panel_technical, panel_biological,
+            metric=metric, condition=condition, y_scale=effective_scale,
+            panel_title=panel_title, seed=1947 + index)
+        if panel is not None:
+            statistics = statistics.assign(panel=panel)
+        all_statistics.append(statistics)
+    for axis in axes.flat[len(panels):]:
+        axis.remove()
+    axes.flat[0].legend(handles=[
         Line2D([], [], marker="o", linestyle="none", markersize=4, alpha=.35,
                color="#555555", label="Technical replicate"),
         Line2D([], [], marker="o", linestyle="none", markersize=7,
                color="#555555", markeredgecolor="white", label="Biological mean"),
     ], title="Replicate display", frameon=False, fontsize=7, loc="center left",
        bbox_to_anchor=(1.01, .5))
-    figure._luxplate_statistics = comparisons
-    figure.tight_layout(); return figure
-
+    if group_by is not None:
+        figure.suptitle(title or metric, fontweight="bold", y=.995)
+    figure._luxplate_statistics = pd.concat(all_statistics, ignore_index=True) if all_statistics else pd.DataFrame()
+    figure.tight_layout(rect=(0, 0, 1, .96) if group_by is not None else None)
+    return figure
 
 def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
                               lum_scale: str = "linear", uncertainty: str = "bars",
@@ -463,7 +501,7 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                 metric, suffix, figure_label = metric_families[family]
                 scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
                 figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
-                    title=figure_label)))
+                    title=figure_label, group_by=panel_by)))
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
             uncertainty=uncertainty, title="Targeted control comparison"))

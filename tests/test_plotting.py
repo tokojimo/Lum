@@ -68,6 +68,23 @@ def test_mixed_panels_offer_log_luminescence_and_error_bars():
     plt.close(figure)
 
 
+def test_mixed_panels_share_od_and_luminescence_limits_across_media():
+    data = pd.concat([
+        _publication_table(),
+        _publication_table().assign(Groupe="SCFM2", DO_corr=lambda frame: frame["DO_corr"] * 4,
+                                    Lum_corr=lambda frame: frame["Lum_corr"] * 20),
+    ], ignore_index=True)
+
+    figure = plot_mixed_panels(data)
+
+    od_axes = [axis for axis in figure.axes if axis.get_ylabel() == r"OD$_{600}$"]
+    lum_axes = [axis for axis in figure.axes if axis.get_ylabel() == "Luminescence (RLU)"]
+    assert len(od_axes) == len(lum_axes) == 2
+    assert od_axes[0].get_ylim() == od_axes[1].get_ylim()
+    assert lum_axes[0].get_ylim() == lum_axes[1].get_ylim()
+    plt.close(figure)
+
+
 def test_linear_rlu_axes_use_scientific_notation_and_plain_title():
     figure = plot_publication_panels(_publication_table(), value="Lum_corr", title="Luminescence")
     axis = figure.axes[0]
@@ -149,6 +166,27 @@ def test_metric_points_ignore_an_entirely_empty_experience_identifier():
     assert sorted(float(collection.get_offsets()[0, 1]) for collection in points) == [10.0, 20.0]
     # Exercise the layout/rendering path from the reported Matplotlib traceback.
     figure.canvas.draw()
+    plt.close(figure)
+
+
+def test_metric_points_make_one_panel_per_medium_and_label_pvalues_with_stars():
+    metrics = pd.DataFrame([
+        {"souche": strain, "Groupe": medium, "experience_id": f"exp{experiment}",
+         "replicat": 1, "lum_norm_auc": base + experiment + strain_index * 10}
+        for medium, base in (("DMEM", 10), ("SCFM2", 100))
+        for experiment in range(1, 6)
+        for strain_index, strain in enumerate(("P0-lux", "Reporter-lux"))
+    ])
+
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", group_by="Groupe", title="Normalized AUC"
+    )
+
+    assert len(figure.axes) == 2
+    assert [axis.get_title() for axis in figure.axes] == ["DMEM", "SCFM2"]
+    labels = [text.get_text() for axis in figure.axes for text in axis.texts]
+    assert any(label.startswith("Pvalue = ") and label.endswith(("*", "ns")) for label in labels)
+    assert not any("pHolm" in label for label in labels)
     plt.close(figure)
 
 
