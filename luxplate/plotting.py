@@ -26,3 +26,23 @@ def plot_raw_curves(data: pd.DataFrame):
         axis.legend(unique.values(), unique.keys(), fontsize="small", loc="best")
         axis.grid(alpha=0.2)
     return figure
+
+
+def plot_qc_curves(data: pd.DataFrame, anomalies: pd.DataFrame):
+    """Plot unmodified curves and overlay proposed anomalies as red crosses."""
+    figure = plot_raw_curves(data)
+    axes = figure.axes
+    if not anomalies.empty:
+        axes[0].scatter(
+            anomalies["temps_h"], anomalies["DO_brute"], marker="x", s=90,
+            linewidths=2.2, color="crimson", zorder=10, label="Anomalie proposée",
+        )
+        axes[1].scatter(
+            anomalies["temps_h"], anomalies["Lum_brute"], marker="x", s=90,
+            linewidths=2.2, color="crimson", zorder=10, label="Anomalie proposée",
+        )
+        for axis in axes:
+            handles, labels = axis.get_legend_handles_labels()
+            unique = dict(zip(labels, handles))
+            axis.legend(unique.values(), unique.keys(), fontsize="small", loc="best")
+    return figure
