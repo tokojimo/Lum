@@ -46,6 +46,31 @@ def _display_panel(value: object) -> str:
     return label.replace("|", " – ")
 
 
+def _medium_label(value: object) -> str:
+    """Remove an experiment prefix so replicate panels can be pooled by medium."""
+    label = str(value).strip()
+    match = re.fullmatch(
+        r"exp(?:eriment)?\s*\d+\s*\|\s*([^()]+)(?:\s*\([^)]*\))?",
+        label,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else label
+
+
+def _has_multiple_experiments(data: pd.DataFrame) -> bool:
+    if "experience_id" in data and data["experience_id"].dropna().astype(str).nunique() > 1:
+        return True
+    return data["Groupe"].astype(str).str.match(
+        r"exp(?:eriment)?\s*\d+\s*\|", case=False
+    ).sum() > 1
+
+
+def _pooled_media(data: pd.DataFrame) -> pd.DataFrame:
+    pooled = data.copy()
+    pooled["Milieu"] = pooled["Groupe"].map(_medium_label)
+    return pooled
+
+
 def _strain_colors(data: pd.DataFrame) -> dict[str, str]:
     """Assign each strain one deterministic color for every panel in a figure."""
     strains = list(dict.fromkeys(data["souche"].dropna().astype(str)))
@@ -105,8 +130,8 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
     strain_colors = _strain_colors(work)
     ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
     figure, axes = plt.subplots(nrows, ncols, figsize=(4.1 * ncols, 3.15 * nrows), squeeze=False)
-    ylabel = {"DO_corr": r"Blank-corrected OD$_{600}$",
-              "Lum_corr": "Blank-corrected luminescence (RLU)",
+    ylabel = {"DO_corr": r"OD$_{600}$",
+              "Lum_corr": "Luminescence (RLU)",
               "Lum_norm": r"Normalized luminescence (RLU/OD$_{600}$)"}.get(value, value)
     for panel_index, panel in enumerate(panels):
         axis = axes.flat[panel_index]
@@ -118,7 +143,9 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
             summary = _aligned_biological_summary(strain_data, value)
             x = summary["temps_h"].to_numpy(float); y = summary["mean"].to_numpy(float)
             sd = summary["std"].fillna(0).to_numpy(float)
+            linestyle = "--" if value in {"Lum_corr", "Lum_norm"} else "-"
             axis.errorbar(x, y, yerr=sd, color=color, lw=1.6, capsize=2,
+                          linestyle=linestyle,
                           marker="o", markersize=2.5, label=strain)
         axis.set(title=_display_panel(panel), xlabel="Time (h)", ylabel=ylabel)
         axis.set_yscale(y_scale)
@@ -130,7 +157,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
     if handles:
         figure.legend(handles, [_display_strain(label) for label in labels], title="Reporter",
                       frameon=False, loc="upper center",
-                      bbox_to_anchor=(0.5, 0.93), ncol=min(5, len(labels)))
+                      bbox_to_anchor=(0.5, 0.94), ncol=min(5, len(labels)))
     figure.suptitle(title or f"{ylabel} over time", fontsize=13, fontweight="bold", y=0.995)
     # Identical limits prevent misleading visual comparisons between replicate panels.
     visible_axes = list(axes.flat[:len(panels)])
@@ -139,7 +166,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         shared_limits = (float(np.nanmin(limits[:, 0])), float(np.nanmax(limits[:, 1])))
         for axis in visible_axes:
             axis.set_ylim(shared_limits)
-    figure.subplots_adjust(top=0.84, bottom=0.12, hspace=0.48, wspace=0.34)
+    figure.subplots_adjust(top=0.78, bottom=0.12, hspace=0.48, wspace=0.34)
     return figure
 
 
@@ -192,18 +219,22 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
                 od_line, = top.plot(ox, oy, color=color, lw=1.8, marker="o", markersize=2.5,
                                      markerfacecolor="white", label=str(strain))
                 bottom.plot(lx, np.where(ly > 0, ly, np.nan) if lum_scale == "log" else ly,
-                           color=color, lw=1.6, marker="s", markersize=2.3,
+                           color=color, lw=1.6, linestyle="--", marker="s", markersize=2.3,
                            markerfacecolor="white")
             else:
                 od_line = top.errorbar(ox, oy, yerr=osd, color=color, lw=1.35, marker="o",
                     markersize=2.5, markerfacecolor="white", capsize=2, label=str(strain)).lines[0]
                 valid = ly > 0 if lum_scale == "log" else np.ones(len(ly), dtype=bool)
                 bottom.errorbar(lx[valid], ly[valid], yerr=lsd[valid], color=color, lw=1.25,
+                    linestyle="--",
                     marker="s", markersize=2.3, markerfacecolor="white", capsize=2)
+            # Errorbar stores the public label on its container rather than on
+            # the first Line2D; the figure-level legend consumes Line2D handles.
+            od_line.set_label(str(strain))
             if panel_index == 0: legend_handles.append(od_line)
-        top.set(title=_display_panel(medium), ylabel=r"Blank-corrected OD$_{600}$")
+        top.set(title=_display_panel(medium), ylabel=r"OD$_{600}$")
         top.set(xlabel="Time (h)")
-        lum_ylabel = ("Blank-corrected luminescence (RLU)" if lum_value == "Lum_corr" else
+        lum_ylabel = ("Luminescence (RLU)" if lum_value == "Lum_corr" else
                       r"Normalized luminescence (RLU/OD$_{600}$)")
         bottom.set_ylabel(lum_ylabel)
         bottom.set_yscale(lum_scale)
@@ -213,10 +244,10 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
         block, column = divmod(panel_index, ncols)
         axes[block, column].remove()
     figure.legend(legend_handles, [_display_strain(line.get_label()) for line in legend_handles], title="Reporter",
-                  frameon=False, loc="upper center", bbox_to_anchor=(.5, .945),
+                  frameon=False, loc="upper center", bbox_to_anchor=(.5, .94),
                   ncol=min(5, len(legend_handles)))
     figure.suptitle(title or "Growth and luminescence", fontweight="bold", y=.995)
-    figure.subplots_adjust(top=.80, bottom=.13, hspace=.38, wspace=.52)
+    figure.subplots_adjust(top=.77, bottom=.13, hspace=.38, wspace=.52)
     return figure
 
 
@@ -275,9 +306,13 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
             boxprops={"facecolor": colors[strain], "alpha": .20, "edgecolor": colors[strain]},
             whiskerprops={"color": colors[strain]}, capprops={"color": colors[strain]})
         mean = float(row["mean"])
-        axis.annotate(f"mean = {mean:.3g}", (strain_index, mean), xytext=(5, 5),
-                      textcoords="offset points", fontsize=7, color=colors[strain])
         raw = technical.loc[technical["souche"].astype(str).eq(strain), metric].to_numpy(float)
+        # Put the exact mean above the strain's highest observation: the label
+        # remains legible and never sits inside the box or on top of a point.
+        highest = float(np.nanmax(np.concatenate([biological_values, raw])))
+        axis.annotate(f"{mean:.3g}", (strain_index, highest), xytext=(0, 7),
+                      ha="center", va="bottom", textcoords="offset points",
+                      fontsize=7, color=colors[strain])
         axis.plot(strain_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
                   marker="o", markersize=2.8, color=colors[strain], alpha=.32, zorder=2)
     identities = list(work[biological_columns].drop_duplicates().itertuples(index=False, name=None))
@@ -306,6 +341,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     axis.set_xticks(range(len(strains)), [_display_strain(s) for s in strains])
     axis.set(xlabel="Reporter", ylabel=metric_labels.get(metric, metric), title=title or metric_labels.get(metric, metric))
     axis.set_yscale(effective_scale)
+    # Reserve a clear annotation band above every mean label and data point.
+    axis.margins(y=.30)
     axis.title.set_fontweight("bold"); _publication_style(axis)
     omnibus, comparisons = paired_nonparametric_tests(work, value=metric)
     strain_positions = {strain: index for index, strain in enumerate(strains)}
@@ -314,10 +351,11 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         & comparisons["condition_2"].isin(strain_positions)
     ]
     transform = blended_transform_factory(axis.transData, axis.transAxes)
+    spacing = min(.055, .15 / max(1, len(usable)))
     for level, comparison in enumerate(usable.itertuples(index=False), start=1):
         left = strain_positions[comparison.condition_1]
         right = strain_positions[comparison.condition_2]
-        y = .82 + .055 * level
+        y = .82 + spacing * level
         p = comparison.p_holm
         stars = "****" if p < .0001 else "***" if p < .001 else "**" if p < .01 else "*" if p < .05 else "ns"
         axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
@@ -356,7 +394,7 @@ def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
 
 
 def build_publication_figures(data: pd.DataFrame, *, title: str = "",
-    families: tuple[str, ...] = ("growth", "corrected", "normalized", "mixed", "peak",
+    families: tuple[str, ...] = ("growth", "corrected", "mixed", "peak",
                                 "peak_time", "auc", "doubling"),
     panel_by: str = "Groupe", lum_scale: str = "linear", normalized_scale: str = "linear",
     metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux") -> list[tuple[str, object]]:
@@ -371,9 +409,19 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
         if family in families and value in data and data[value].notna().any():
             figures.append((suffix, plot_publication_panels(data, value=value, group_by=panel_by,
                 y_scale=scale, title=figure_label)))
+            if family in {"growth", "corrected"} and _has_multiple_experiments(data):
+                pooled = _pooled_media(data)
+                recap_group = "Milieu" if panel_by == "Groupe" else "souche"
+                figures.append((f"{suffix}_moyenne_experiences", plot_publication_panels(
+                    pooled, value=value, group_by=recap_group, y_scale=scale,
+                    title=f"{figure_label} — mean of experiments")))
     if "mixed" in families:
+        mixed_data = _pooled_media(data) if _has_multiple_experiments(data) else data
+        if "Milieu" in mixed_data:
+            mixed_data = mixed_data.copy()
+            mixed_data["Groupe"] = mixed_data["Milieu"]
         figures.append(("croissance_luminescence_mixte", plot_mixed_panels(
-            data, lum_scale=lum_scale, uncertainty=uncertainty,
+            mixed_data, lum_scale=lum_scale, uncertainty=uncertainty,
             title="Growth and non-normalized luminescence", lum_value="Lum_corr")))
     metric_families = {"peak": ("lum_norm_peak", "pic_luminescence_normalisee", "Peak normalized luminescence"),
                        "peak_time": ("lum_norm_peak_time_h", "temps_pic_luminescence_normalisee",
