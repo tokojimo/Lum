@@ -17,6 +17,14 @@ from openpyxl import load_workbook
 HEADER_READING = "Lecture en cours"
 HEADER_TIME = "temps moy. [s]"
 PLATE_ROWS = set("ABCDEFGH")
+STRAIN_START = re.compile(
+    # Common P. aeruginosa strain names used in LuxPlate exports.  A medium
+    # may contain spaces/parentheses, so look for the strain token rather than
+    # trying to split the label on whitespace.
+    r"(?<!\S)(?=(?:\d+(?:\.\d+)+[A-Za-z][A-Za-z0-9.-]*|PA(?:O)?\d+[A-Za-z0-9.-]*)(?:\s|$))",
+    flags=re.IGNORECASE,
+)
+BLANK_NUMBER = re.compile(r"^(?:blanc|blank)\s*[-_ ]?(\d+)\b", flags=re.IGNORECASE)
 
 
 def clean_text(value: object) -> str:
@@ -86,12 +94,44 @@ def _sample_metadata(header: str) -> dict[str, str]:
     match = re.match(r"^(.*?)(?:\s*\(([A-H]\d{2})\))?$", normalized)
     name = clean_text(match.group(1)) if match else normalized
     well = (match.group(2) or "") if match else ""
+    kind = "blanc" if re.search(r"\b(?:blanc|blank)\s*\d*\b", name, re.IGNORECASE) else "souche"
+    medium = ""
+    strain = name
+    if kind == "souche":
+        strain_match = STRAIN_START.search(name)
+        if strain_match and strain_match.start() > 0:
+            medium = clean_text(name[:strain_match.start()])
+            strain = clean_text(name[strain_match.start():])
     return {
         "sample_header": header,
-        "souche": name,
+        "souche": strain,
         "puits": well,
-        "type": "blanc" if any(word in name.lower() for word in ("blanc", "blank")) else "souche",
+        "type": kind,
+        "milieu_entete": medium,
+        "nom_echantillon": name,
     }
+
+
+def _resolve_groups(metadata: pd.DataFrame, plate_groups: dict[str, str]) -> pd.Series:
+    """Prefer media encoded before strain names and associate numbered blanks.
+
+    In real exports ``Blanc1`` commonly denotes the blank for the first medium,
+    while the plate-plan group is merely a technical block (``Groupe 1``).
+    """
+    groups = metadata["puits"].map(plate_groups).fillna("")
+    strain_media = list(dict.fromkeys(
+        metadata.loc[metadata["type"].eq("souche"), "milieu_entete"].loc[lambda values: values.ne("")]
+    ))
+    encoded = metadata["milieu_entete"].ne("")
+    groups.loc[encoded] = metadata.loc[encoded, "milieu_entete"]
+
+    for index, row in metadata.loc[metadata["type"].eq("blanc")].iterrows():
+        number = BLANK_NUMBER.match(row["nom_echantillon"])
+        if number and 1 <= int(number.group(1)) <= len(strain_media):
+            groups.loc[index] = strain_media[int(number.group(1)) - 1]
+        elif len(strain_media) == 1:
+            groups.loc[index] = strain_media[0]
+    return groups
 
 
 def _plate_groups(sheet) -> dict[str, str]:
@@ -164,8 +204,8 @@ def parse_kinetic_workbook(
         result["temps_h"] = result[["temps_sec_do", "temps_sec_lum"]].mean(axis=1) / 3600.0
 
         metadata = pd.DataFrame([_sample_metadata(column) for column in common])
-        metadata["Groupe"] = metadata["puits"].map(_plate_groups(workbook[plan_names[0]])).fillna("")
-        metadata["replicat"] = metadata.groupby("souche", sort=False).cumcount() + 1
+        metadata["Groupe"] = _resolve_groups(metadata, _plate_groups(workbook[plan_names[0]]))
+        metadata["replicat"] = metadata.groupby(["souche", "Groupe"], sort=False).cumcount() + 1
         result = result.merge(metadata, on="sample_header", how="left", validate="many_to_one")
         columns = [
             "temps_h", "souche", "Groupe", "replicat", "DO_brute", "Lum_brute",
