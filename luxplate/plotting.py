@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from colorsys import hls_to_rgb
+from hashlib import sha256
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,7 +18,16 @@ from luxplate.statistics import paired_nonparametric_tests
 
 
 PUBLICATION_COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000")
-MIXED_PROMOTER_COLORS = PUBLICATION_COLORS[:3]
+
+# The reporters used routinely in the laboratory keep their visual identity in
+# every figure, independently of CSV row order or newly added strains.
+REPORTER_COLORS = {
+    "p0": "#0072B2",
+    "psped": "#D55E00",
+    "psped2-1a": "#009E73",
+    "psped2-3b": "#CC79A7",
+    "pspee": "#E69F00",
+}
 
 
 def _publication_style(axis):
@@ -82,10 +93,33 @@ def _pooled_media(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def _strain_colors(data: pd.DataFrame) -> dict[str, str]:
-    """Assign each strain one deterministic color for every panel in a figure."""
+    """Assign stable reporter colors, including across data order and releases."""
     strains = list(dict.fromkeys(data["souche"].dropna().astype(str)))
-    return {strain: PUBLICATION_COLORS[index % len(PUBLICATION_COLORS)]
-            for index, strain in enumerate(strains)}
+    colors: dict[str, str] = {}
+    for strain in strains:
+        key = re.sub(r"(?:[-_ ]?lux)$", "", strain.strip(), flags=re.IGNORECASE).casefold()
+        if key in REPORTER_COLORS:
+            colors[strain] = REPORTER_COLORS[key]
+            continue
+        # A digest rather than the position in the input makes an unfamiliar
+        # strain retain its color when strains are added or rows are reordered.
+        digest = sha256(key.encode("utf-8")).digest()
+        hue = int.from_bytes(digest[:2], "big") / 65535
+        saturation = .58 + digest[2] / 255 * .16
+        lightness = .38 + digest[3] / 255 * .12
+        red, green, blue = hls_to_rgb(hue, lightness, saturation)
+        colors[strain] = f"#{round(red * 255):02X}{round(green * 255):02X}{round(blue * 255):02X}"
+    return colors
+
+
+def _legend_layout(item_count: int, *, extra_items: int = 0) -> tuple[int, float]:
+    """Return legend columns and a safe axes ceiling below a multi-row legend."""
+    total = item_count + extra_items
+    columns = min(5, max(1, total))
+    rows = int(np.ceil(total / columns))
+    # A legend row is relatively tall because it includes error-bar handles;
+    # reserve enough room even for the larger corrected-luminescence font.
+    return columns, max(.30, .60 - .11 * (rows - 1))
 
 
 def _aligned_biological_summary(data: pd.DataFrame, value: str,
@@ -139,7 +173,9 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         raise ValueError("No usable data available for the final figures.")
     strain_colors = _strain_colors(work)
     ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
-    figure, axes = plt.subplots(nrows, ncols, figsize=(4.1 * ncols, 3.15 * nrows), squeeze=False)
+    header_columns, _ = _legend_layout(len(strain_colors))
+    figure_width = max(4.1 * ncols, 2.15 * header_columns)
+    figure, axes = plt.subplots(nrows, ncols, figsize=(figure_width, 3.15 * nrows), squeeze=False)
     ylabel = {"DO_corr": r"OD$_{600}$",
               "Lum_corr": "Luminescence (RLU)",
               "Lum_norm": r"Normalized luminescence (RLU/OD$_{600}$)"}.get(value, value)
@@ -167,11 +203,14 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         axis.remove()
     handles, labels = axes.flat[0].get_legend_handles_labels()
     if handles:
+        legend_columns, axes_top = _legend_layout(len(labels))
         legend = figure.legend(handles, [_display_strain(label) for label in labels], title="Reporter",
                       frameon=False, loc="upper center", fontsize=14 if value == "Lum_corr" else None,
-                      bbox_to_anchor=(0.5, 0.955), ncol=min(5, len(labels)))
+                      bbox_to_anchor=(0.5, 0.92), ncol=legend_columns)
         if value == "Lum_corr":
             legend.get_title().set_fontsize(18)
+    else:
+        axes_top = .72
     figure.suptitle(title or f"{ylabel} over time", fontsize=13, fontweight="bold", y=0.995)
     # Identical limits prevent misleading visual comparisons between replicate panels.
     visible_axes = list(axes.flat[:len(panels)])
@@ -180,7 +219,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         shared_limits = (float(np.nanmin(limits[:, 0])), float(np.nanmax(limits[:, 1])))
         for axis in visible_axes:
             axis.set_ylim(shared_limits)
-    figure.subplots_adjust(top=0.72, bottom=0.12, hspace=0.48, wspace=0.34)
+    figure.subplots_adjust(top=axes_top, bottom=0.12, hspace=0.48, wspace=0.34)
     return figure
 
 
@@ -210,12 +249,11 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
     if not panels:
         raise ValueError("No condition selected for combined figure.")
     strains_in_order = list(dict.fromkeys(work["souche"].dropna().astype(str)))
-    strain_colors = {
-        strain: MIXED_PROMOTER_COLORS[index % len(MIXED_PROMOTER_COLORS)]
-        for index, strain in enumerate(strains_in_order)
-    }
+    strain_colors = _strain_colors(work)
     ncols = min(3, len(panels)); blocks = int(np.ceil(len(panels) / ncols))
-    figure, axes = plt.subplots(blocks, ncols, figsize=(4.5 * ncols, 3.6 * blocks), squeeze=False)
+    header_columns, _ = _legend_layout(len(strains_in_order), extra_items=2)
+    figure_width = max(4.5 * ncols, 2.15 * header_columns)
+    figure, axes = plt.subplots(blocks, ncols, figsize=(figure_width, 3.6 * blocks), squeeze=False)
     legend_handles = []
     od_axes = []
     lum_axes = []
@@ -279,14 +317,15 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
         Line2D([], [], color="#333333", lw=1.8, linestyle="-"),
         Line2D([], [], color="#333333", lw=1.6, linestyle="--"),
     ]
+    legend_columns, axes_top = _legend_layout(len(legend_handles), extra_items=2)
     figure.legend([*legend_handles, *style_handles],
                   [*[_display_strain(line.get_label()) for line in legend_handles],
                    r"OD$_{600}$", "Luminescence (RLU)"],
                   title="Promoter (color) · Measurement (line)",
-                  frameon=False, loc="upper center", bbox_to_anchor=(.5, .955),
-                  ncol=min(5, len(legend_handles) + 2))
+                  frameon=False, loc="upper center", bbox_to_anchor=(.5, .92),
+                  ncol=legend_columns)
     figure.suptitle(title or "Growth and luminescence", fontweight="bold", y=.995)
-    figure.subplots_adjust(top=.72, bottom=.13, hspace=.38, wspace=.52)
+    figure.subplots_adjust(top=axes_top, bottom=.13, hspace=.38, wspace=.52)
     return figure
 
 

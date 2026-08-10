@@ -99,6 +99,48 @@ def test_linear_rlu_axes_use_scientific_notation_and_plain_title():
     plt.close(figure)
 
 
+def test_reporter_colors_are_fixed_across_order_and_figure_families():
+    expected = {
+        "P0-lux": "#0072B2", "PspeD-lux": "#D55E00",
+        "PspeD2-1A-lux": "#009E73", "PspeD2-3B-lux": "#CC79A7",
+        "PspeE-lux": "#E69F00",
+    }
+    data = pd.concat([
+        _publication_table().iloc[:6].assign(souche=strain)
+        for strain in reversed(expected)
+    ], ignore_index=True)
+
+    corrected = plot_publication_panels(data, value="Lum_corr")
+    mixed = plot_mixed_panels(data)
+
+    corrected_colors = {
+        container.get_label(): container.lines[0].get_color()
+        for container in corrected.axes[0].containers
+    }
+    mixed_colors = {line.get_label(): line.get_color() for line in mixed.axes[0].lines
+                    if not line.get_label().startswith("_")}
+    assert corrected_colors == expected
+    assert mixed_colors == expected
+    plt.close(corrected)
+    plt.close(mixed)
+
+
+def test_large_legends_leave_space_above_medium_titles():
+    strains = ["P0-lux", "PspeD-lux", "PspeD2-1A-lux", "PspeD2-3B-lux",
+               "PspeE-lux", *[f"Reporter-{index}" for index in range(7)]]
+    data = pd.concat([
+        _publication_table().iloc[:6].assign(souche=strain) for strain in strains
+    ], ignore_index=True)
+
+    for figure in (plot_publication_panels(data, value="Lum_corr"), plot_mixed_panels(data)):
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        legend_bottom = figure.legends[0].get_window_extent(renderer).y0
+        title_top = figure.axes[0].title.get_window_extent(renderer).y1
+        assert title_top < legend_bottom
+        plt.close(figure)
+
+
 def test_metric_points_average_technical_series_per_independent_experiment():
     metrics = pd.DataFrame([
         {"souche": strain, "Groupe": "SCFM2", "experience_id": experiment,
