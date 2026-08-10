@@ -203,7 +203,15 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
             # crashing the complete publication-figure gallery.
             effective_scale = "linear"
     strains = list(dict.fromkeys(work["souche"].astype(str)))
-    biological_columns = [column for column in ("experience_id", "replicat") if column in work]
+    # Some exports include an ``experience_id`` column even though it is wholly
+    # empty.  Such a column is metadata, not a usable biological identifier:
+    # comparing its NaN identity with ``Series.eq`` would select no rows and
+    # leave the axis without points.  Prefer only identifiers that contain at
+    # least one real value, falling back to the condition below when necessary.
+    biological_columns = [
+        column for column in ("experience_id", "replicat")
+        if column in work and work[column].notna().any()
+    ]
     group_columns = ["souche", "Groupe", *biological_columns]
     work = work.groupby(group_columns, dropna=False, sort=False)[metric].mean().reset_index()
     biological_columns = biological_columns or ["Groupe"]
@@ -214,7 +222,10 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     for identity_index, identity in enumerate(identities):
         mask = np.ones(len(work), dtype=bool)
         for column, value in zip(biological_columns, identity):
-            mask &= work[column].eq(value).to_numpy()
+            # ``NaN != NaN``; explicitly match missing identities so partially
+            # populated identifier columns cannot silently discard observations.
+            matches = work[column].isna() if pd.isna(value) else work[column].eq(value)
+            mask &= matches.to_numpy()
         subset = work.loc[mask]
         xs, ys = [], []
         for strain_index, strain in enumerate(strains):
