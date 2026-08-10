@@ -181,8 +181,21 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     required = {"souche", "Groupe", metric}
     missing = required.difference(metrics.columns)
     if missing: raise ValueError(f"Missing columns for metric: {sorted(missing)}")
-    work = metrics.loc[pd.to_numeric(metrics[metric], errors="coerce").notna()].copy()
-    if y_scale == "log": work = work.loc[work[metric].gt(0)]
+    if y_scale not in {"linear", "log"}:
+        raise ValueError("Scale must be 'linear' or 'log'.")
+    numeric_metric = pd.to_numeric(metrics[metric], errors="coerce")
+    work = metrics.loc[numeric_metric.notna()].copy()
+    work[metric] = numeric_metric.loc[work.index]
+    effective_scale = y_scale
+    if y_scale == "log":
+        positive = work[metric].gt(0)
+        if positive.any():
+            work = work.loc[positive]
+        else:
+            # Matplotlib cannot lay out an empty/non-positive logarithmic axis.
+            # Retain the available observations on a linear axis instead of
+            # crashing the complete publication-figure gallery.
+            effective_scale = "linear"
     strains = list(dict.fromkeys(work["souche"].astype(str)))
     biological_columns = [column for column in ("experience_id", "replicat") if column in work]
     group_columns = ["souche", "Groupe", *biological_columns]
@@ -213,7 +226,7 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         "doubling_time_h": "Doubling time (h)"}
     axis.set_xticks(range(len(strains)), [_display_strain(s) for s in strains])
     axis.set(xlabel="Strain", ylabel=metric_labels.get(metric, metric), title=title or metric_labels.get(metric, metric))
-    axis.set_yscale(y_scale)
+    axis.set_yscale(effective_scale)
     axis.title.set_fontweight("bold"); _publication_style(axis)
     if identities: axis.legend(title="Independent experiment", frameon=False, loc="best", fontsize="small")
     figure.tight_layout(); return figure
