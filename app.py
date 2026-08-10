@@ -12,7 +12,7 @@ from luxplate.kinetics import run_kinetics
 from luxplate.plotting import (plot_blank_correction, plot_kinetics, plot_normalization,
                                plot_qc_curves, plot_raw_curves)
 from luxplate.qc import run_quality_control
-from luxplate.varioskan import inspect_workbook, parse_kinetic_workbook
+from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
 from luxplate.workflow import build_manual_decisions, filter_experiment_data, run_complete_analysis
 
 st.set_page_config(page_title="LuxPlate Analyzer", page_icon="🧫", layout="wide")
@@ -27,40 +27,41 @@ guided_tab, import_tab, qc_tab, blanks_tab, normalization_tab, kinetics_tab = st
 with guided_tab:
     st.header("Analyse guidée d'un classeur réel")
     st.write(
-        "Déposez votre fichier, vérifiez les souches et milieux détectés, retirez si nécessaire "
+        "Déposez un ou plusieurs fichiers, vérifiez les souches détectées, retirez si nécessaire "
         "des points ou des courbes, puis lancez tout le calcul en une fois."
     )
-    guided_upload = st.file_uploader(
-        "Déposer un classeur Varioskan (.xlsx ou .xlsm)", type=["xlsx", "xlsm"], key="guided_upload"
+    guided_uploads = st.file_uploader(
+        "Déposer un ou plusieurs classeurs Varioskan (.xlsx ou .xlsm)", type=["xlsx", "xlsm"],
+        accept_multiple_files=True, key="guided_upload"
     )
-    if guided_upload is None:
-        st.info("Le fichier reste traité localement par l'application.")
+    if not guided_uploads:
+        st.info("Les fichiers restent traités localement par l'application.")
     else:
         try:
-            guided_payload = guided_upload.getvalue()
-            _, guided_lum_sheets = inspect_workbook(BytesIO(guided_payload))
-            guided_lum = st.selectbox("Lecture de luminescence à utiliser", guided_lum_sheets)
-            guided_data = parse_kinetic_workbook(BytesIO(guided_payload), guided_lum)
+            guided_inputs = []
+            guided_identity = []
+            for file_index, upload in enumerate(guided_uploads):
+                payload = upload.getvalue()
+                _, lum_sheets = inspect_workbook(BytesIO(payload))
+                lum = st.selectbox(f"Luminescence — {upload.name}", lum_sheets,
+                                   key=f"guided_lum_{file_index}_{upload.name}")
+                guided_inputs.append((upload.name, parse_kinetic_workbook(BytesIO(payload), lum)))
+                guided_identity.append((upload.name, hash(payload), lum))
+            guided_data = combine_kinetic_tables(guided_inputs)
         except Exception as error:
             st.error(f"Import impossible : {error}")
         else:
             strain_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "souche"].unique())
-            group_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "Groupe"].unique())
-            select_columns = st.columns(2)
-            guided_strains = select_columns[0].multiselect(
+            guided_strains = st.multiselect(
                 "Souches à analyser", strain_options, default=strain_options
             )
-            guided_groups = select_columns[1].multiselect(
-                "Milieux / groupes à analyser", group_options, default=group_options
-            )
             try:
-                guided_selected = filter_experiment_data(guided_data, guided_strains, guided_groups)
+                guided_selected = filter_experiment_data(guided_data, guided_strains)
             except ValueError as error:
                 st.warning(str(error))
             else:
                 guided_signature = (
-                    guided_upload.name, hash(guided_payload), guided_lum,
-                    tuple(guided_strains), tuple(guided_groups),
+                    tuple(guided_identity), tuple(guided_strains),
                 )
                 if st.session_state.get("guided_signature") != guided_signature:
                     st.session_state.pop("guided_complete_result", None)
@@ -71,7 +72,7 @@ with guided_tab:
                     st.error("Aucun blanc n'a été détecté pour les milieux sélectionnés.")
                 else:
                     st.success(
-                        f"{len(guided_strains)} souche(s), {len(guided_groups)} milieu(x), "
+                        f"{len(guided_strains)} souche(s), {len(guided_uploads)} fichier(s), "
                         f"{guided_selected['sample_header'].nunique()} courbe(s) et "
                         f"{blanks['sample_header'].nunique()} blanc(s) détectés."
                     )
@@ -149,7 +150,7 @@ with guided_tab:
                     with result_tabs[3]:
                         st.pyplot(plot_kinetics(complete.normalization.normalized_data,
                                                 complete.kinetics.series_metrics), use_container_width=True)
-                    base = guided_upload.name.rsplit(".", 1)[0]
+                    base = guided_uploads[0].name.rsplit(".", 1)[0] if len(guided_uploads) == 1 else "analyse_multi_fichiers"
                     exports = st.columns(3)
                     exports[0].download_button("Données finales", complete.normalization.normalized_data.to_csv(
                         index=False).encode("utf-8-sig"), f"{base}_donnees_finales.csv", "text/csv")
@@ -164,26 +165,31 @@ with import_tab:
         "Cette première étape intègre `01_mise_en_forme_donnees.py` : elle associe "
         "les mesures DO/luminescence, conserve chaque puits technique et construit le tableau long."
     )
-    uploaded = st.file_uploader("Classeur Varioskan cinétique (.xlsx)", type=["xlsx", "xlsm"])
+    uploads = st.file_uploader("Classeurs Varioskan cinétiques (.xlsx)", type=["xlsx", "xlsm"],
+                               accept_multiple_files=True)
 
-    if uploaded is None:
-        st.info("Chargez un classeur pour choisir la lecture de luminescence et inspecter les données brutes.")
+    if not uploads:
+        st.info("Chargez un ou plusieurs classeurs pour choisir la lecture de luminescence et inspecter les données brutes.")
     else:
-        payload = uploaded.getvalue()
         try:
-            absorbance_sheet, luminescence_sheets = inspect_workbook(BytesIO(payload))
-            left, right = st.columns(2)
-            left.text_input("Feuille d'absorbance détectée", absorbance_sheet, disabled=True)
-            selected_luminescence = right.selectbox("Feuille de luminescence", luminescence_sheets)
-            data = parse_kinetic_workbook(BytesIO(payload), selected_luminescence)
-            previous_source = st.session_state.get("source_payload")
-            if previous_source != payload:
+            parsed, source_identity = [], []
+            for file_index, upload in enumerate(uploads):
+                payload = upload.getvalue()
+                absorbance_sheet, luminescence_sheets = inspect_workbook(BytesIO(payload))
+                selected_luminescence = st.selectbox(
+                    f"Luminescence — {upload.name} (absorbance : {absorbance_sheet})", luminescence_sheets,
+                    key=f"import_lum_{file_index}_{upload.name}")
+                parsed.append((upload.name, parse_kinetic_workbook(BytesIO(payload), selected_luminescence)))
+                source_identity.append((upload.name, hash(payload), selected_luminescence))
+            data = combine_kinetic_tables(parsed)
+            previous_source = st.session_state.get("source_identity")
+            if previous_source != source_identity:
                 for key in ("qc_journal", "validated_qc_journal", "qc_validated",
                             "blank_correction_result", "normalization_result"):
                     st.session_state.pop(key, None)
-            st.session_state["source_payload"] = payload
+            st.session_state["source_identity"] = source_identity
             st.session_state["long_data"] = data
-            st.session_state["source_name"] = uploaded.name.rsplit(".", 1)[0]
+            st.session_state["source_name"] = uploads[0].name.rsplit(".", 1)[0] if len(uploads) == 1 else "analyse_multi_fichiers"
         except Exception as error:
             st.error(f"Import impossible : {error}")
             st.stop()

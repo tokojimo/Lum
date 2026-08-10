@@ -20,15 +20,24 @@ class CompleteAnalysisResult:
 
 
 def filter_experiment_data(
-    data: pd.DataFrame, strains: list[str], groups: list[str]
+    data: pd.DataFrame, strains: list[str], groups: list[str] | None = None
 ) -> pd.DataFrame:
-    """Keep selected strains and the blanks required for their selected groups."""
+    """Keep selected strains and automatically include their associated blanks.
+
+    ``groups`` is retained for API compatibility, but the interface no longer
+    needs to expose this technical blank-association key to users.
+    """
     if not strains:
         raise ValueError("Sélectionnez au moins une souche.")
-    if not groups:
-        raise ValueError("Sélectionnez au moins un milieu/groupe.")
-    selected_groups = data["Groupe"].astype(str).isin(groups)
+    strain_rows = data["type"].astype(str).str.lower().eq("souche")
     selected_strains = data["souche"].astype(str).isin(strains)
+    inferred_groups = data.loc[strain_rows & selected_strains, "Groupe"].astype(str).unique()
+    if groups is not None:
+        inferred_groups = [group for group in inferred_groups if group in set(map(str, groups))]
+    if not len(inferred_groups):
+        raise ValueError("La sélection ne contient aucune série de souche.")
+    groups = list(inferred_groups)
+    selected_groups = data["Groupe"].astype(str).isin(groups)
     required_blanks = data["type"].astype(str).str.lower().eq("blanc")
     result = data.loc[selected_groups & (selected_strains | required_blanks)].copy()
     if not result["type"].astype(str).str.lower().eq("souche").any():
