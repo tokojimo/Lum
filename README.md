@@ -128,6 +128,15 @@ and metrics without rerunning processing. It supports individual curves or
 biological mean ± SD/SEM, faceting, dual OD/luminescence axes, stable editable
 colors, and parameter plots exposing each biological replicate.
 
+For publication time courses, acquisition times that differ by no more than one
+minute are assigned to the same observed timepoint. Technical wells are averaged
+within each experiment/biological replicate first; only then are the biological
+mean and SD calculated. This prevents artificial saw-tooth curves without
+interpolation or smoothing. The gallery includes corrected OD, non-normalized and
+normalized luminescence, a dual-axis OD/non-normalized-luminescence view, and
+boxplots for normalized peak, peak time, normalized AUC, and doubling time. Each
+boxplot reports the exact biological mean.
+
 ## Export formats
 
 Figures are saved directly from matplotlib as PNG (150/300/600 dpi), vector
