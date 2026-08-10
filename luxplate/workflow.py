@@ -88,6 +88,41 @@ def build_manual_decisions(
     return pd.DataFrame(rows, columns=DECISION_COLUMNS)
 
 
+def build_bulk_point_decisions(
+    data: pd.DataFrame,
+    *,
+    experience: str,
+    times: list[float],
+    sample_type: str = "all",
+) -> pd.DataFrame:
+    """Create point decisions for a simple experiment/time/type selection.
+
+    One decision is emitted per technical curve and selected observed time.  The
+    resulting journal uses the same auditable format as selections made in the
+    detailed table.
+    """
+    if sample_type not in {"all", "blanc", "souche"}:
+        raise ValueError("sample_type doit valoir 'all', 'blanc' ou 'souche'.")
+    experience_column = "experience" if "experience" in data else "experience_id"
+    if experience_column not in data or not times:
+        return pd.DataFrame(columns=DECISION_COLUMNS)
+    selected = data.loc[data[experience_column].astype(str).eq(str(experience))].copy()
+    if sample_type != "all":
+        selected = selected.loc[selected["type"].astype(str).str.lower().eq(sample_type)]
+    numeric_times = pd.to_numeric(selected["temps_h"], errors="coerce")
+    selected = selected.loc[numeric_times.apply(
+        lambda value: pd.notna(value) and any(abs(float(value) - float(time)) <= 1e-6 for time in times)
+    )]
+    point_indices = selected.groupby(["sample_header", "temps_h"], sort=False).head(1).index.tolist()
+    decisions = build_manual_decisions(data, point_indices, [])
+    if not decisions.empty:
+        decisions["detection_type"] = "selection_groupee"
+        decisions["raison_utilisateur"] = (
+            f"Exclusion groupée — expérience {experience}, type {sample_type}"
+        )
+    return decisions
+
+
 def run_complete_analysis(
     data: pd.DataFrame,
     decisions: pd.DataFrame | None = None,

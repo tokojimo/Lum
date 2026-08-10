@@ -183,6 +183,21 @@ def test_gallery_adds_pooled_recap_figures_for_multiple_experiments():
         plt.close(figure)
 
 
+def test_experiment_and_pooled_panel_labels_preserve_medium_parentheses():
+    data = _publication_table().assign(Groupe="exp2|SCFM2 (Po)")
+    figure = plot_publication_panels(data, value="DO_corr")
+    assert figure.axes[0].get_title() == "Experiment 2 – SCFM2 (Po)"
+    figures = build_publication_figures(
+        pd.concat([data.assign(experience_id="exp2"),
+                   data.assign(experience_id="exp3", Groupe="exp3|SCFM2 (Po)")]),
+        families=("growth",),
+    )
+    assert figures[1][1].axes[0].get_title() == "SCFM2 (Po)"
+    plt.close(figure)
+    for _, item in figures:
+        plt.close(item)
+
+
 def test_nearby_technical_times_are_aligned_before_biological_summary():
     data = _publication_table()
     data.loc[data["puits"].eq("A2"), "temps_h"] += 5 / 3600

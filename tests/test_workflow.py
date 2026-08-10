@@ -1,6 +1,7 @@
 import pandas as pd
 
-from luxplate.workflow import build_manual_decisions, filter_experiment_data, run_complete_analysis
+from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
+                               filter_experiment_data, run_complete_analysis)
 
 
 def workflow_table():
@@ -56,3 +57,15 @@ def test_manual_whole_curve_decision_removes_every_series_point():
     result = run_complete_analysis(data, decisions, consecutive_points=2, growth_window_points=2)
     assert len(result.blank_correction.excluded_data) == 4
     assert set(result.kinetics.series_metrics["souche"]) == {"S1"}
+
+
+def test_bulk_decisions_can_remove_first_time_from_every_blank_in_one_experiment():
+    data = workflow_table().assign(experience="Expérience 2")
+    decisions = build_bulk_point_decisions(
+        data, experience="Expérience 2", times=[0.0], sample_type="blanc"
+    )
+    assert len(decisions) == 1
+    assert decisions.iloc[0]["sample_header"] == "Blanc (B01)"
+    result = run_complete_analysis(data, decisions, consecutive_points=2, growth_window_points=2)
+    assert len(result.blank_correction.excluded_data) == 1
+    assert result.blank_correction.excluded_data.iloc[0]["temps_h"] == 0
