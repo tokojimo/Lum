@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import pandas as pd
 import streamlit as st
 
 from luxplate.blanks import run_blank_correction
@@ -14,7 +15,8 @@ from luxplate.plotting import (build_guided_raw_figures, build_publication_figur
                                plot_normalization, plot_qc_curves, plot_raw_curves)
 from luxplate.qc import run_quality_control
 from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
-from luxplate.workflow import build_manual_decisions, filter_experiment_data, run_complete_analysis
+from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
+                               filter_experiment_data, run_complete_analysis)
 
 st.set_page_config(page_title="LuxPlate Analyzer", page_icon="🧫", layout="wide")
 st.title("LuxPlate Analyzer")
@@ -110,6 +112,39 @@ with guided_tab:
                 ].drop_duplicates().tolist()
                 removed_series = st.multiselect("Courbes entières à supprimer", strain_headers)
 
+                with st.expander("Exclusion simple par expérience et par temps", expanded=True):
+                    st.caption(
+                        "Alternative au grand tableau : choisissez une expérience, un ou plusieurs temps, "
+                        "puis excluez ces points de toutes les courbes ou seulement des blancs."
+                    )
+                    experience_column = "experience" if "experience" in guided_selected else None
+                    if experience_column is None:
+                        st.info("Ce mode devient disponible lorsque plusieurs fichiers sont importés.")
+                        simple_enabled = False
+                        simple_experience = ""
+                        simple_times = []
+                        simple_type = "all"
+                    else:
+                        simple_enabled = st.checkbox("Activer cette exclusion groupée")
+                        simple_experience = st.selectbox(
+                            "Expérience", guided_selected[experience_column].drop_duplicates().tolist()
+                        )
+                        simple_subset = guided_selected.loc[
+                            guided_selected[experience_column].astype(str).eq(str(simple_experience))
+                        ]
+                        time_options = sorted(simple_subset["temps_h"].dropna().astype(float).unique())
+                        simple_times = st.multiselect(
+                            "Temps à exclure (h)", time_options,
+                            default=time_options[:1],
+                            format_func=lambda value: f"{value:g} h",
+                        )
+                        simple_type_label = st.radio(
+                            "Courbes concernées", ["Toutes", "Blancs seulement", "Échantillons seulement"],
+                            horizontal=True,
+                        )
+                        simple_type = {"Toutes": "all", "Blancs seulement": "blanc",
+                                       "Échantillons seulement": "souche"}[simple_type_label]
+
                 with st.expander("Paramètres de calcul", expanded=False):
                     p1, p2, p3, p4 = st.columns(4)
                     guided_min_od = p1.number_input("DO minimale", min_value=0.0, value=0.05, step=0.01)
@@ -120,6 +155,14 @@ with guided_tab:
                 if st.button("Lancer toute l'analyse", type="primary", disabled=blanks.empty):
                     removed_points = edited_points.loc[edited_points["Supprimer"], "source_index"].astype(int).tolist()
                     manual_decisions = build_manual_decisions(guided_selected, removed_points, removed_series)
+                    if simple_enabled:
+                        bulk_decisions = build_bulk_point_decisions(
+                            guided_selected, experience=simple_experience,
+                            times=simple_times, sample_type=simple_type,
+                        )
+                        manual_decisions = pd.concat(
+                            [manual_decisions, bulk_decisions], ignore_index=True
+                        ).drop_duplicates("decision_id")
                     try:
                         complete = run_complete_analysis(
                             guided_selected, manual_decisions, minimum_od=float(guided_min_od),
@@ -195,8 +238,8 @@ with guided_tab:
                                 "luminescence is blank-corrected RLU divided by blank-corrected OD600. "
                                 "Summary boxplots show independent biological experiments and their exact mean; "
                                 "small points are technical replicates and large points are biological means. "
-                                "Statistics use biological means only (Friedman test with paired Wilcoxon "
-                                "tests and Holm correction)."
+                                "Statistics use biological means only. The bottom p-value is the overall Friedman "
+                                "test; every bracket reports its own paired Wilcoxon p-value after Holm correction."
                             )
                     with result_tabs[4]:
                         st.subheader("Exporter les résultats complets")

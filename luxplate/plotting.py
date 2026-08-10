@@ -49,7 +49,7 @@ def _display_strain(value: object) -> str:
 def _display_panel(value: object) -> str:
     """Turn machine-oriented group identifiers into publication labels."""
     label = str(value).strip()
-    match = re.fullmatch(r"exp(?:eriment)?\s*(\d+)\s*\|\s*([^()]+)(?:\s*\([^)]*\))?", label,
+    match = re.fullmatch(r"exp(?:eriment)?\s*(\d+)\s*\|\s*(.+)", label,
                          flags=re.IGNORECASE)
     if match:
         return f"Experiment {match.group(1)} – {match.group(2).strip()}"
@@ -60,7 +60,7 @@ def _medium_label(value: object) -> str:
     """Remove an experiment prefix so replicate panels can be pooled by medium."""
     label = str(value).strip()
     match = re.fullmatch(
-        r"exp(?:eriment)?\s*\d+\s*\|\s*([^()]+)(?:\s*\([^)]*\))?",
+        r"exp(?:eriment)?\s*\d+\s*\|\s*(.+)",
         label,
         flags=re.IGNORECASE,
     )
@@ -384,12 +384,12 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         right = strain_positions[comparison.condition_2]
         y = .82 + spacing * level
         p = comparison.p_holm
-        stars = "****" if p < .0001 else "***" if p < .001 else "**" if p < .01 else "*" if p < .05 else "ns"
+        p_label = "pHolm < 0.0001" if p < .0001 else f"pHolm = {p:.3g}"
         axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
                   transform=transform, color="#333333", lw=.7, clip_on=False)
-        axis.text((left + right) / 2, y + .006, stars, transform=transform,
+        axis.text((left + right) / 2, y + .006, p_label, transform=transform,
                   ha="center", va="bottom", fontsize=7)
-    axis.text(.99, .01, "Friedman: " + (f"p = {omnibus:.3g}" if np.isfinite(omnibus) else "not estimable"),
+    axis.text(.99, .01, "Overall Friedman test: " + (f"p = {omnibus:.3g}" if np.isfinite(omnibus) else "not estimable"),
               transform=axis.transAxes, ha="right", va="bottom", fontsize=7, color="#555555")
     axis.legend(handles=[
         Line2D([], [], marker="o", linestyle="none", markersize=4, alpha=.35,
