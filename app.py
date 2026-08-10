@@ -140,7 +140,9 @@ with guided_tab:
                     cards[1].metric("Points normalisés", int(complete.normalization.normalized_data["normalization_ok"].sum()))
                     cards[2].metric("Séries analysées", len(complete.kinetics.series_metrics))
                     cards[3].metric("Avertissements", len(complete.kinetics.warnings))
-                    result_tabs = st.tabs(["Blancs corrigés", "Normalisation", "Cinétique", "Courbes finales"])
+                    result_tabs = st.tabs([
+                        "Blancs corrigés", "Normalisation", "Cinétique", "Courbes finales", "⬇ Exports",
+                    ])
                     with result_tabs[0]:
                         st.dataframe(complete.blank_correction.blank_profiles, use_container_width=True, hide_index=True)
                     with result_tabs[1]:
@@ -196,14 +198,19 @@ with guided_tab:
                                 "Statistics use biological means only (Friedman test with paired Wilcoxon "
                                 "tests and Holm correction)."
                             )
-                    base = guided_uploads[0].name.rsplit(".", 1)[0] if len(guided_uploads) == 1 else "analyse_multi_fichiers"
-                    exports = st.columns(3)
-                    exports[0].download_button("Données finales", complete.normalization.normalized_data.to_csv(
-                        index=False).encode("utf-8-sig"), f"{base}_donnees_finales.csv", "text/csv")
-                    exports[1].download_button("Métriques cinétiques", complete.kinetics.series_metrics.to_csv(
-                        index=False).encode("utf-8-sig"), f"{base}_metriques_cinetiques.csv", "text/csv")
-                    exports[2].download_button("Décisions d'exclusion", st.session_state["guided_decisions"].to_csv(
-                        index=False).encode("utf-8-sig"), f"{base}_decisions_exclusion.csv", "text/csv")
+                    with result_tabs[4]:
+                        st.subheader("Exporter les résultats complets")
+                        st.caption("Téléchargez directement les tableaux produits par l'analyse guidée.")
+                        base = (guided_uploads[0].name.rsplit(".", 1)[0]
+                                if len(guided_uploads) == 1 else "analyse_multi_fichiers")
+                        exports = st.columns(3)
+                        exports[0].download_button("Données finales (.csv)", complete.normalization.normalized_data.to_csv(
+                            index=False).encode("utf-8-sig"), f"{base}_donnees_finales.csv", "text/csv",
+                            type="primary")
+                        exports[1].download_button("Métriques cinétiques (.csv)", complete.kinetics.series_metrics.to_csv(
+                            index=False).encode("utf-8-sig"), f"{base}_metriques_cinetiques.csv", "text/csv")
+                        exports[2].download_button("Décisions d'exclusion (.csv)", st.session_state["guided_decisions"].to_csv(
+                            index=False).encode("utf-8-sig"), f"{base}_decisions_exclusion.csv", "text/csv")
 
 with import_tab:
     st.header("1 · Import et mise en forme")

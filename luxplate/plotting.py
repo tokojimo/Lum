@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
-from matplotlib.ticker import ScalarFormatter
+from matplotlib.ticker import FuncFormatter
 from matplotlib.transforms import blended_transform_factory
 
 from luxplate.kinetics import run_kinetics
@@ -16,6 +16,7 @@ from luxplate.statistics import paired_nonparametric_tests
 
 
 PUBLICATION_COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000")
+MIXED_PROMOTER_COLORS = PUBLICATION_COLORS[:3]
 
 
 def _publication_style(axis):
@@ -25,11 +26,11 @@ def _publication_style(axis):
 
 
 def _scientific_rlu_axis(axis):
-    """Keep large RLU values compact and unambiguous (for example 8 × 10⁵)."""
-    formatter = ScalarFormatter(useMathText=True)
-    formatter.set_scientific(True)
-    formatter.set_powerlimits((0, 0))
-    axis.yaxis.set_major_formatter(formatter)
+    """Put the exponent on every RLU tick instead of above the plotting area."""
+    axis.yaxis.set_major_formatter(FuncFormatter(
+        lambda value, _position: "0" if value == 0 else f"{value:.0e}"
+    ))
+    axis.yaxis.offsetText.set_visible(False)
 
 
 def _series_label(row: pd.Series) -> str:
@@ -166,9 +167,11 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         axis.remove()
     handles, labels = axes.flat[0].get_legend_handles_labels()
     if handles:
-        figure.legend(handles, [_display_strain(label) for label in labels], title="Reporter",
-                      frameon=False, loc="upper center",
+        legend = figure.legend(handles, [_display_strain(label) for label in labels], title="Reporter",
+                      frameon=False, loc="upper center", fontsize=14 if value == "Lum_corr" else None,
                       bbox_to_anchor=(0.5, 0.955), ncol=min(5, len(labels)))
+        if value == "Lum_corr":
+            legend.get_title().set_fontsize(18)
     figure.suptitle(title or f"{ylabel} over time", fontsize=13, fontweight="bold", y=0.995)
     # Identical limits prevent misleading visual comparisons between replicate panels.
     visible_axes = list(axes.flat[:len(panels)])
@@ -206,7 +209,11 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
     panels = list(dict.fromkeys(work["Groupe"].dropna().astype(str)))
     if not panels:
         raise ValueError("No condition selected for combined figure.")
-    strain_colors = _strain_colors(work)
+    strains_in_order = list(dict.fromkeys(work["souche"].dropna().astype(str)))
+    strain_colors = {
+        strain: MIXED_PROMOTER_COLORS[index % len(MIXED_PROMOTER_COLORS)]
+        for index, strain in enumerate(strains_in_order)
+    }
     ncols = min(3, len(panels)); blocks = int(np.ceil(len(panels) / ncols))
     figure, axes = plt.subplots(blocks, ncols, figsize=(4.5 * ncols, 3.6 * blocks), squeeze=False)
     legend_handles = []
@@ -262,8 +269,8 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
     ]
     figure.legend([*legend_handles, *style_handles],
                   [*[_display_strain(line.get_label()) for line in legend_handles],
-                   "Croissance (DO) — trait plein", "Luminescence (RLU) — pointillés"],
-                  title="Promoteur (couleur) · Mesure (style)",
+                   r"OD$_{600}$", "Luminescence (RLU)"],
+                  title="Promoter (color) · Measurement (line)",
                   frameon=False, loc="upper center", bbox_to_anchor=(.5, .955),
                   ncol=min(5, len(legend_handles) + 2))
     figure.suptitle(title or "Growth and luminescence", fontweight="bold", y=.995)
