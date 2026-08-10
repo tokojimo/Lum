@@ -7,7 +7,8 @@ from io import BytesIO
 import streamlit as st
 
 from luxplate.blanks import run_blank_correction
-from luxplate.plotting import plot_blank_correction, plot_qc_curves, plot_raw_curves
+from luxplate.normalization import run_normalization
+from luxplate.plotting import plot_blank_correction, plot_normalization, plot_qc_curves, plot_raw_curves
 from luxplate.qc import run_quality_control
 from luxplate.varioskan import inspect_workbook, parse_kinetic_workbook
 
@@ -15,8 +16,8 @@ st.set_page_config(page_title="LuxPlate Analyzer", page_icon="🧫", layout="wid
 st.title("LuxPlate Analyzer")
 st.caption("Du classeur Varioskan brut aux données contrôlées, analysées et visualisées.")
 
-import_tab, qc_tab, blanks_tab = st.tabs(
-    ["1 · Import et mise en forme", "2 · Contrôle qualité", "3 · Correction des blancs"]
+import_tab, qc_tab, blanks_tab, normalization_tab = st.tabs(
+    ["1 · Import et mise en forme", "2 · Contrôle qualité", "3 · Correction des blancs", "4 · Normalisation par la DO"]
 )
 
 with import_tab:
@@ -39,7 +40,7 @@ with import_tab:
             data = parse_kinetic_workbook(BytesIO(payload), selected_luminescence)
             previous_source = st.session_state.get("source_payload")
             if previous_source != payload:
-                for key in ("qc_journal", "validated_qc_journal", "qc_validated"):
+                for key in ("qc_journal", "validated_qc_journal", "qc_validated", "blank_correction_result"):
                     st.session_state.pop(key, None)
             st.session_state["source_payload"] = payload
             st.session_state["long_data"] = data
@@ -167,6 +168,7 @@ with blanks_tab:
         except ValueError as error:
             st.error(f"Correction des blancs impossible : {error}")
         else:
+            st.session_state["blank_correction_result"] = correction
             metrics = dict(zip(correction.summary["metrique"], correction.summary["valeur"]))
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Lignes avant QC", int(metrics["lignes_avant_qc"]))
@@ -210,6 +212,54 @@ with blanks_tab:
                 file_name=f"{base}_journal_qc_valide.csv", mime="text/csv",
             )
 
+with normalization_tab:
+    st.header("4 · Normalisation de la luminescence par la DO")
+    if "blank_correction_result" not in st.session_state:
+        st.info("Exécutez d'abord la correction des blancs dans l'onglet 3.")
+    else:
+        correction = st.session_state["blank_correction_result"]
+        parameter_columns = st.columns(3)
+        k_sd = parameter_columns[0].number_input("Multiplicateur du blanc (k)", min_value=0.0, value=3.0, step=0.1)
+        minimum_od = parameter_columns[1].number_input("DO minimale", min_value=0.0, value=0.05, step=0.01, format="%.3f")
+        consecutive = parameter_columns[2].number_input("Points consécutifs", min_value=1, value=3, step=1)
+        try:
+            normalization = run_normalization(correction.corrected_data, k_sd, minimum_od, int(consecutive))
+        except ValueError as error:
+            st.error(f"Normalisation impossible : {error}")
+        else:
+            if not normalization.warnings.empty:
+                for message in normalization.warnings["message"]:
+                    st.warning(message)
+            metrics = dict(zip(normalization.summary["metric"], normalization.summary["value"]))
+            metric_columns = st.columns(4)
+            metric_columns[0].metric("Séries validées", int(metrics["valid_series"]))
+            metric_columns[1].metric("Séries non validées", int(metrics["invalid_series"]))
+            metric_columns[2].metric("Lignes normalisées", int(metrics["normalized_rows"]))
+            metric_columns[3].metric("Lignes non normalisées", int(metrics["rejected_rows"]))
+            threshold_tab, series_tab, preview_tab, curves_tab, rejected_tab = st.tabs([
+                "Seuils", "Validation des séries", "Données normalisées", "Courbes", "Lignes non normalisées"
+            ])
+            with threshold_tab:
+                st.dataframe(normalization.threshold_details, use_container_width=True, hide_index=True)
+            with series_tab:
+                st.dataframe(normalization.series_validation, use_container_width=True, hide_index=True)
+            with preview_tab:
+                st.dataframe(normalization.normalized_data, use_container_width=True, hide_index=True)
+            with curves_tab:
+                st.pyplot(plot_normalization(normalization.normalized_data), use_container_width=True)
+            with rejected_tab:
+                st.dataframe(normalization.rejected_rows, use_container_width=True, hide_index=True)
+            base = st.session_state.get("source_name", "experience")
+            exports = st.columns(4)
+            for column, label, table, suffix in [
+                (exports[0], "Données normalisées", normalization.normalized_data, "normalise_DO"),
+                (exports[1], "Validation des séries", normalization.series_validation, "validation_series"),
+                (exports[2], "Détails des seuils", normalization.threshold_details, "seuils_DO"),
+                (exports[3], "Avertissements", normalization.warnings, "avertissements_normalisation"),
+            ]:
+                column.download_button(label, table.to_csv(index=False).encode("utf-8-sig"),
+                                       file_name=f"{base}_{suffix}.csv", mime="text/csv")
+
 st.divider()
 st.subheader("Étapes suivantes")
-st.write("Normalisation par la DO → paramètres cinétiques → statistiques et figures.")
+st.write("Paramètres cinétiques → statistiques et figures.")

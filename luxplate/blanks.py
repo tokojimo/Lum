@@ -129,13 +129,18 @@ def calculate_blank_profiles(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def correct_blanks(data: pd.DataFrame, blank_profiles: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Join same-group/time profiles to strains and calculate corrected values."""
-    strains = data.loc[data["type"].eq("souche")].copy()
-    corrected = strains.merge(blank_profiles, on=["Groupe", "temps_h"], how="left", validate="many_to_one")
+    """Correct every retained strain and blank against its group/time profile.
+
+    Keeping corrected blanks is part of the public contract: the normalization
+    step uses their residual OD distribution to derive its detection threshold.
+    """
+    observations = data.loc[data["type"].isin(["souche", "blanc"])].copy()
+    corrected = observations.merge(blank_profiles, on=["Groupe", "temps_h"], how="left", validate="many_to_one")
     corrected["DO_corr"] = corrected["DO_brute"] - corrected["DO_blanc_moyenne"]
     corrected["Lum_corr"] = corrected["Lum_brute"] - corrected["Lum_blanc_moyenne"]
     missing = corrected.loc[
-        corrected[["DO_blanc_moyenne", "Lum_blanc_moyenne"]].isna().any(axis=1),
+        corrected["type"].eq("souche")
+        & corrected[["DO_blanc_moyenne", "Lum_blanc_moyenne"]].isna().any(axis=1),
         ["Groupe", "temps_h"],
     ].drop_duplicates()
     warnings = pd.DataFrame([
@@ -147,7 +152,7 @@ def correct_blanks(data: pd.DataFrame, blank_profiles: pd.DataFrame) -> tuple[pd
 
 
 def run_blank_correction(data: pd.DataFrame, decisions: pd.DataFrame | None = None) -> BlankCorrectionResult:
-    """Validate, apply QC, derive blank profiles, and correct strain observations."""
+    """Validate, apply QC, derive profiles, and correct strains and blanks."""
     prepared = validate_blank_inputs(data, decisions)
     retained, excluded = apply_qc_decisions(prepared, decisions)
     retained = associate_strains_with_blanks(retained)
@@ -158,7 +163,12 @@ def run_blank_correction(data: pd.DataFrame, decisions: pd.DataFrame | None = No
             ("lignes_avant_qc", len(prepared)),
             ("lignes_exclues", len(excluded)),
             ("lignes_apres_qc", len(retained)),
-            ("lignes_souches_corrigees", int(corrected[["DO_corr", "Lum_corr"]].notna().all(axis=1).sum())),
+            ("lignes_souches_corrigees", int(
+                (corrected["type"].eq("souche") & corrected[["DO_corr", "Lum_corr"]].notna().all(axis=1)).sum()
+            )),
+            ("lignes_blancs_corrigees", int(
+                (corrected["type"].eq("blanc") & corrected[["DO_corr", "Lum_corr"]].notna().all(axis=1)).sum()
+            )),
             ("groupes_sans_blanc", int(warnings["Groupe"].nunique()) if not warnings.empty else 0),
         ],
         columns=["metrique", "valeur"],
