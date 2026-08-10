@@ -2,7 +2,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from luxplate.varioskan import inspect_workbook, parse_kinetic_workbook
 
@@ -58,3 +58,29 @@ def test_multiple_luminescence_sheets_require_explicit_selection():
     source.seek(0)
     selected = parse_kinetic_workbook(source, "Luminescence 2")
     assert selected["Lum_brute"].max() == 40
+
+
+def test_medium_prefix_is_separated_and_numbered_blank_is_associated():
+    source = synthetic_workbook()
+    workbook = load_workbook(source)
+    renamed = {
+        "PAO1 (A01)": "SCFM2 (Po) 14.1Ac attB::P0-lux (A01)",
+        "PAO1 (A02)": "SCFM2 (Po) 14.1Ac attB::P0-lux (A02)",
+        "Blanc (B01)": "Blanc1 (B01)",
+    }
+    for sheet_name in ("Absorbance 600", "Luminescence 1"):
+        sheet = workbook[sheet_name]
+        for cell in sheet[2]:
+            if cell.value in renamed:
+                cell.value = renamed[cell.value]
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+
+    result = parse_kinetic_workbook(output)
+
+    strains = result.loc[result["type"].eq("souche")]
+    blanks = result.loc[result["type"].eq("blanc")]
+    assert strains["souche"].unique().tolist() == ["14.1Ac attB::P0-lux"]
+    assert strains["Groupe"].unique().tolist() == ["SCFM2 (Po)"]
+    assert blanks["Groupe"].unique().tolist() == ["SCFM2 (Po)"]
