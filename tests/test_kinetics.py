@@ -4,6 +4,10 @@ import pandas.testing as pdt
 import pytest
 
 from luxplate.kinetics import (
+    REJECTED_SERIES_COLUMNS,
+    SERIES_METRIC_COLUMNS,
+    TECHNICAL_SUMMARY_COLUMNS,
+    WARNING_COLUMNS,
     calculate_auc,
     calculate_growth_metrics,
     calculate_peak,
@@ -64,12 +68,13 @@ def test_nonpositive_infinite_and_missing_values_are_excluded():
     assert row["od_auc"] == pytest.approx(-1.05)
 
 
-def test_duplicate_times_reject_series_with_reason():
+def test_duplicate_times_warn_and_break_growth_windows_without_rejecting_global_metrics():
     data = kinetic_table()
     data.loc[2, "temps_h"] = 1
     result = run_kinetics(data)
-    assert result.series_metrics.empty
-    assert result.rejected_series.iloc[0]["reason"] == "duplicate_time"
+    assert len(result.series_metrics) == 1
+    assert result.series_metrics.iloc[0]["od_auc"] == pytest.approx(calculate_auc(data.temps_h, data.DO_corr))
+    assert "duplicate_time" in set(result.warnings["code"])
 
 
 def test_experiments_are_strictly_separate_and_inputs_unchanged():
@@ -102,3 +107,48 @@ def test_normalized_output_integrates_with_kinetics():
     result = run_kinetics(normalized, growth_window_points=3)
     assert len(result.series_metrics) == 1
     assert result.series_metrics.iloc[0]["lum_norm_peak"] > 0
+
+
+def test_auc_spans_single_and_successive_missing_observations():
+    assert calculate_auc([0, 1, 2, 3], [0, 1, np.nan, 3]) == pytest.approx(4.5)
+    assert calculate_auc([0, 1, 2, 3, 4], [0, 1, np.nan, np.nan, 4]) == pytest.approx(8.0)
+
+
+def test_same_header_in_two_wells_remains_two_series_and_replicate_is_summarized_separately():
+    a1 = kinetic_table(header="shared")
+    a2 = kinetic_table(header="shared", scale=2); a2["puits"] = "A2"
+    biological = kinetic_table(header="shared", scale=3); biological["puits"] = "A3"; biological["replicat"] = 2
+    result = run_kinetics(pd.concat([a1, a2, biological], ignore_index=True))
+    assert len(result.series_metrics) == 3
+    assert set(result.series_metrics["puits"]) == {"A1", "A2", "A3"}
+    assert result.strain_summary["n_technical_series"].tolist() == [2, 1]
+    assert result.strain_summary["replicat"].tolist() == [1, 2]
+
+
+def test_irregular_window_uses_real_time_and_reports_quality_and_nonpositive_reason():
+    data = kinetic_table().iloc[:3].copy()
+    data["temps_h"] = [0.0, 0.5, 3.0]
+    data["DO_corr"] = 0.1 * np.exp(0.4 * data["temps_h"])
+    result = run_kinetics(data, growth_window_min_duration_h=2, growth_rate_min_r_squared=0.99)
+    row = result.series_metrics.iloc[0]
+    assert row["max_growth_rate_per_h"] == pytest.approx(0.4)
+    assert row["growth_rate_r_squared"] == pytest.approx(1)
+
+    data["DO_corr"] = [0.3, 0.2, 0.1]
+    row = run_kinetics(data).series_metrics.iloc[0]
+    assert np.isnan(row["doubling_time_h"])
+    assert row["growth_rate_publishability_reason"] == "non_positive_growth_rate"
+
+
+def test_low_regression_quality_is_explicit_and_output_schemas_are_stable():
+    data = kinetic_table().iloc[:3].copy(); data["DO_corr"] = [0.1, 0.5, 0.11]
+    result = run_kinetics(data, growth_rate_min_r_squared=0.99)
+    assert result.series_metrics.iloc[0]["growth_rate_publishability_reason"] == "insufficient_regression_quality"
+    assert "insufficient_regression_quality" in set(result.warnings["code"])
+
+    rejected = kinetic_table().iloc[:1]
+    empty = run_kinetics(rejected)
+    assert list(empty.series_metrics.columns) == list(SERIES_METRIC_COLUMNS)
+    assert list(empty.strain_summary.columns) == list(TECHNICAL_SUMMARY_COLUMNS)
+    assert list(empty.rejected_series.columns) == list(REJECTED_SERIES_COLUMNS)
+    assert list(run_kinetics(kinetic_table()).warnings.columns) == list(WARNING_COLUMNS)
