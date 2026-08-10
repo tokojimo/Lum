@@ -141,6 +141,11 @@ pytest
 
 Initial synthetic tests pin kinetic primitives and the critical biological-N
 rules. Real regression fixtures must be anonymized before commit.
+The required historical fixture package, comparison fields, provisional
+tolerances, and end-to-end validation protocol are documented in
+[`docs/historical_validation.md`](docs/historical_validation.md). Until that
+package is supplied, tests establish the LuxPlate contract but not historical
+equivalence.
 
 ## Project structure
 
@@ -163,7 +168,8 @@ explicit synthetic fixture directories may be committed.
 ## Limitations
 
 - No representative Varioskan workbook was available in the initial checkout,
-  so supported sheet variants remain to be established from fixtures.
+  and no matching legacy output is currently versioned, so supported sheet
+  variants and historical equivalence remain to be established from fixtures.
 - The scaffold does not yet expose the processing/statistics UI.
 - Ambiguous sheets, metadata, aliases, groups, duplicates, and blanks always
   require review: **warn, don't guess**.
