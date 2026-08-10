@@ -215,3 +215,27 @@ def parse_kinetic_workbook(
         return result[columns].sort_values(["type", "souche", "replicat", "temps_h"]).reset_index(drop=True)
     finally:
         workbook.close()
+
+
+def combine_kinetic_tables(
+    tables: Iterable[tuple[str, pd.DataFrame]],
+) -> pd.DataFrame:
+    """Combine several parsed workbooks without mixing their technical groups.
+
+    Plate-plan groups are an internal blank-association key.  Namespacing that
+    key (and sample headers) by workbook prevents identically named wells or
+    groups from unrelated experiments from being merged during QC/correction.
+    The original workbook name remains available in ``experience`` for exports.
+    """
+    combined: list[pd.DataFrame] = []
+    for position, (name, table) in enumerate(tables, start=1):
+        frame = table.copy(deep=True)
+        experience = clean_text(Path(name).stem) or f"experience_{position}"
+        namespace = f"exp{position}"
+        frame["experience"] = experience
+        frame["Groupe"] = namespace + "|" + frame["Groupe"].fillna("").astype(str)
+        frame["sample_header"] = namespace + "|" + frame["sample_header"].fillna("").astype(str)
+        combined.append(frame)
+    if not combined:
+        raise ValueError("Ajoutez au moins un classeur à analyser.")
+    return pd.concat(combined, ignore_index=True, sort=False)

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from openpyxl import Workbook, load_workbook
 
-from luxplate.varioskan import inspect_workbook, parse_kinetic_workbook
+from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
 
 
 def synthetic_workbook(*, second_luminescence=False) -> BytesIO:
@@ -84,3 +84,14 @@ def test_medium_prefix_is_separated_and_numbered_blank_is_associated():
     assert strains["souche"].unique().tolist() == ["14.1Ac attB::P0-lux"]
     assert strains["Groupe"].unique().tolist() == ["SCFM2 (Po)"]
     assert blanks["Groupe"].unique().tolist() == ["SCFM2 (Po)"]
+
+
+def test_combining_workbooks_namespaces_internal_blank_links():
+    first = parse_kinetic_workbook(synthetic_workbook())
+    second = parse_kinetic_workbook(synthetic_workbook())
+
+    combined = combine_kinetic_tables([("jour1.xlsx", first), ("jour2.xlsx", second)])
+
+    assert set(combined["experience"]) == {"jour1", "jour2"}
+    assert combined["Groupe"].nunique() == 2
+    assert combined["sample_header"].nunique() == first["sample_header"].nunique() * 2

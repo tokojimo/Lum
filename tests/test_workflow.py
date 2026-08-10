@@ -18,7 +18,17 @@ def workflow_table():
 
 
 def test_filter_keeps_selected_strain_and_required_blanks():
-    selected = filter_experiment_data(workflow_table(), ["S1"], ["M1"])
+    selected = filter_experiment_data(workflow_table(), ["S1"])
+    assert set(selected["souche"]) == {"S1", "Blanc"}
+
+
+def test_filter_infers_only_groups_needed_by_selected_strains():
+    data = workflow_table()
+    unrelated = data.copy()
+    unrelated["Groupe"] = "M2"
+    unrelated["souche"] = unrelated["souche"].replace({"S1": "S3", "S2": "S4"})
+    selected = filter_experiment_data(pd.concat([data, unrelated], ignore_index=True), ["S1"])
+    assert set(selected["Groupe"]) == {"M1"}
     assert set(selected["souche"]) == {"S1", "Blanc"}
 
 
