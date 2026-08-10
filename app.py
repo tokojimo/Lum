@@ -10,7 +10,7 @@ from luxplate.blanks import run_blank_correction
 from luxplate.normalization import run_normalization
 from luxplate.kinetics import run_kinetics
 from luxplate.export import package_figures
-from luxplate.plotting import (build_publication_figures, plot_blank_correction, plot_kinetics,
+from luxplate.plotting import (build_guided_raw_figures, build_publication_figures, plot_blank_correction, plot_kinetics,
                                plot_normalization, plot_qc_curves, plot_raw_curves)
 from luxplate.qc import run_quality_control
 from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
@@ -53,16 +53,20 @@ with guided_tab:
             st.error(f"Import impossible : {error}")
         else:
             strain_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "souche"].unique())
+            medium_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "Groupe"].unique())
+            guided_media = st.multiselect(
+                "Milieux à analyser", medium_options, default=medium_options
+            )
             guided_strains = st.multiselect(
                 "Souches à analyser", strain_options, default=strain_options
             )
             try:
-                guided_selected = filter_experiment_data(guided_data, guided_strains)
+                guided_selected = filter_experiment_data(guided_data, guided_strains, guided_media)
             except ValueError as error:
                 st.warning(str(error))
             else:
                 guided_signature = (
-                    tuple(guided_identity), tuple(guided_strains),
+                    tuple(guided_identity), tuple(guided_media), tuple(guided_strains),
                 )
                 if st.session_state.get("guided_signature") != guided_signature:
                     st.session_state.pop("guided_complete_result", None)
@@ -77,20 +81,15 @@ with guided_tab:
                         f"{guided_selected['sample_header'].nunique()} courbe(s) et "
                         f"{blanks['sample_header'].nunique()} blanc(s) détectés."
                     )
-                raw_qc = run_quality_control(guided_selected)
-                info_tabs = st.tabs(["Blancs importés", "Courbes DO", "Courbes de luminescence", "QC automatique"])
+                info_tabs = st.tabs(["Courbes des blancs", "Courbes des échantillons"])
                 with info_tabs[0]:
-                    st.dataframe(blanks, use_container_width=True, hide_index=True)
+                    st.caption("Une figure statique par réplicat biologique, avec la DO et la luminescence.")
+                    for _, figure in build_guided_raw_figures(guided_selected, sample_type="blanc"):
+                        st.pyplot(figure, use_container_width=True)
                 with info_tabs[1]:
-                    st.line_chart(guided_selected.pivot_table(
-                        index="temps_h", columns="sample_header", values="DO_brute", aggfunc="first"
-                    ))
-                with info_tabs[2]:
-                    st.line_chart(guided_selected.pivot_table(
-                        index="temps_h", columns="sample_header", values="Lum_brute", aggfunc="first"
-                    ))
-                with info_tabs[3]:
-                    st.dataframe(raw_qc.series_summary, use_container_width=True, hide_index=True)
+                    st.caption("Une figure statique par souche, milieu et réplicat biologique.")
+                    for _, figure in build_guided_raw_figures(guided_selected, sample_type="souche"):
+                        st.pyplot(figure, use_container_width=True)
 
                 st.subheader("Points et courbes à supprimer")
                 st.caption(

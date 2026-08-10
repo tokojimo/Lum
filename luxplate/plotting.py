@@ -104,6 +104,39 @@ def plot_raw_curves(data: pd.DataFrame):
     return figure
 
 
+def build_guided_raw_figures(data: pd.DataFrame, *, sample_type: str) -> list[tuple[str, object]]:
+    """Build one static DO/luminescence figure per biological replicate.
+
+    Technical wells belonging to the same strain, medium and biological replicate
+    stay together in a figure.  Keeping these previews as Matplotlib figures avoids
+    the much heavier interactive charts in the guided import screen.
+    """
+    required = {"temps_h", "souche", "Groupe", "replicat", "sample_header", "type",
+                "DO_brute", "Lum_brute"}
+    missing = required.difference(data.columns)
+    if missing:
+        raise ValueError(f"Colonnes manquantes pour la figure : {sorted(missing)}")
+    work = data.loc[data["type"].astype(str).str.lower().eq(sample_type.lower())].copy()
+    figures: list[tuple[str, object]] = []
+    for keys, replicate in work.groupby(["Groupe", "souche", "replicat"], dropna=False, sort=False):
+        medium, strain, biological_replicate = keys
+        title = f"{medium} · {strain} · réplicat biologique {biological_replicate}"
+        figure, axes = plt.subplots(1, 2, figsize=(10, 3.6), constrained_layout=True)
+        for header, curve in replicate.groupby("sample_header", sort=False):
+            curve = curve.sort_values("temps_h", kind="stable")
+            label = str(header)
+            axes[0].plot(curve["temps_h"], curve["DO_brute"], lw=1.4, label=label)
+            axes[1].plot(curve["temps_h"], curve["Lum_brute"], lw=1.4, label=label)
+        axes[0].set(title="DO", xlabel="Temps (h)", ylabel="DO brute")
+        axes[1].set(title="Luminescence", xlabel="Temps (h)", ylabel="Luminescence brute (RLU)")
+        for axis in axes:
+            _publication_style(axis)
+            axis.legend(fontsize="x-small", frameon=False, loc="best")
+        figure.suptitle(title, fontsize=11, fontweight="bold")
+        figures.append((title, figure))
+    return figures
+
+
 def plot_qc_curves(data: pd.DataFrame, anomalies: pd.DataFrame):
     """Plot unmodified curves and overlay proposed anomalies as red crosses."""
     figure = plot_raw_curves(data)

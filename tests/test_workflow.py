@@ -32,6 +32,15 @@ def test_filter_infers_only_groups_needed_by_selected_strains():
     assert set(selected["souche"]) == {"S1", "Blanc"}
 
 
+def test_filter_respects_selected_media_and_keeps_their_blanks():
+    data = workflow_table()
+    second_medium = data.copy()
+    second_medium["Groupe"] = "M2"
+    selected = filter_experiment_data(pd.concat([data, second_medium], ignore_index=True), ["S1"], ["M2"])
+    assert set(selected["Groupe"]) == {"M2"}
+    assert set(selected["souche"]) == {"S1", "Blanc"}
+
+
 def test_manual_point_and_series_decisions_are_applied_end_to_end():
     data = filter_experiment_data(workflow_table(), ["S1"], ["M1"])
     point_index = data.index[(data["sample_header"] == "S1 (A01)") & (data["temps_h"] == 1)][0]
