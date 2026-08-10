@@ -112,6 +112,24 @@ def test_metric_points_ignore_infinities_before_selecting_log_scale():
     plt.close(figure)
 
 
+def test_metric_points_ignore_an_entirely_empty_experience_identifier():
+    metrics = pd.DataFrame([
+        {"souche": strain, "Groupe": "SCFM2", "experience_id": np.nan,
+         "replicat": 1, "lum_norm_auc": value}
+        for strain, value in (("P0-lux", 10.0), ("Reporter-lux", 20.0))
+    ])
+
+    figure = plot_metric_points(metrics, metric="lum_norm_auc", y_scale="log")
+
+    axis = figure.axes[0]
+    points = [collection for collection in axis.collections if len(collection.get_offsets())]
+    assert axis.get_yscale() == "log"
+    assert sorted(float(collection.get_offsets()[0, 1]) for collection in points) == [10.0, 20.0]
+    # Exercise the layout/rendering path from the reported Matplotlib traceback.
+    figure.canvas.draw()
+    plt.close(figure)
+
+
 def test_gallery_can_select_curve_families():
     figures = build_publication_figures(
         _publication_table(), families=("growth", "mixed"), uncertainty="ribbon"
