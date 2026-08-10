@@ -22,6 +22,13 @@ def _series_label(row: pd.Series) -> str:
     return str(row.get("souche", row.get("sample_header", "Série")))
 
 
+def _strain_colors(data: pd.DataFrame) -> dict[str, str]:
+    """Assign each strain one deterministic color for every panel in a figure."""
+    strains = list(dict.fromkeys(data["souche"].dropna().astype(str)))
+    return {strain: PUBLICATION_COLORS[index % len(PUBLICATION_COLORS)]
+            for index, strain in enumerate(strains)}
+
+
 def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "Groupe",
                             title: str | None = None, y_scale: str = "linear"):
     """Make one polished mean ± SD time-course panel per medium or strain.
@@ -43,6 +50,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
     panels = list(dict.fromkeys(work[group_by].dropna().astype(str)))
     if not panels:
         raise ValueError("Aucune donnée exploitable pour construire les figures finales.")
+    strain_colors = _strain_colors(work)
     ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
     figure, axes = plt.subplots(nrows, ncols, figsize=(4.1 * ncols, 3.15 * nrows), squeeze=False)
     ylabel = {"DO_corr": "Densité optique corrigée", "Lum_corr": "Luminescence corrigée (RLU)",
@@ -51,8 +59,8 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         axis = axes.flat[panel_index]
         subset = work.loc[work[group_by].astype(str).eq(panel)]
         strains = list(dict.fromkeys(subset["souche"].astype(str)))
-        for index, strain in enumerate(strains):
-            color = PUBLICATION_COLORS[index % len(PUBLICATION_COLORS)]
+        for strain in strains:
+            color = strain_colors[strain]
             strain_data = subset.loc[subset["souche"].astype(str).eq(strain)]
             for _, curve in strain_data.groupby("sample_header", sort=False):
                 curve = curve.sort_values("temps_h")
@@ -101,14 +109,15 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
     panels = list(dict.fromkeys(work["Groupe"].dropna().astype(str)))
     if not panels:
         raise ValueError("Aucune condition sélectionnée pour la figure mixte.")
+    strain_colors = _strain_colors(work)
     ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
     figure, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 3.4 * nrows), squeeze=False)
     legend_handles = []
     for panel_index, medium in enumerate(panels):
         left = axes.flat[panel_index]; right = left.twinx()
         subset = work.loc[work["Groupe"].astype(str).eq(medium)]
-        for index, (strain, strain_data) in enumerate(subset.groupby("souche", sort=False)):
-            color = PUBLICATION_COLORS[index % len(PUBLICATION_COLORS)]
+        for strain, strain_data in subset.groupby("souche", sort=False):
+            color = strain_colors[str(strain)]
             od = _mean_sd(strain_data, "DO_corr"); lum = _mean_sd(strain_data, "Lum_corr")
             ox = od["temps_h"].to_numpy(float); oy = od["mean"].to_numpy(float)
             osd = od["std"].fillna(0).to_numpy(float)
@@ -352,22 +361,30 @@ def plot_normalization(data: pd.DataFrame):
 
 
 def plot_kinetics(data: pd.DataFrame, series_metrics: pd.DataFrame):
-    """Plot each well and annotate OD/normalized-luminescence kinetic landmarks."""
+    """Plot strain curves with stable colors and one compact legend entry per strain."""
     required = {"temps_h", "sample_header", "DO_corr", "Lum_norm"}
     missing = required.difference(data.columns)
     if missing:
         raise ValueError(f"Colonnes manquantes pour la figure : {sorted(missing)}")
+    work = data.loc[data["type"].eq("souche")].copy() if "type" in data else data.copy()
     figure, axes = plt.subplots(1, 2, figsize=(12, 4.5), constrained_layout=True)
+    strain_colors = _strain_colors(work)
+    labelled_strains: set[str] = set()
     group_columns = [column for column in
                      ("experience_id", "souche", "Groupe", "sample_header", "puits", "replicat")
-                     if column in data]
-    for keys, curve in data.groupby(group_columns, dropna=False, sort=False):
+                     if column in work]
+    for keys, curve in work.groupby(group_columns, dropna=False, sort=False):
         curve = curve.sort_values("temps_h", kind="stable")
         keys = keys if isinstance(keys, tuple) else (keys,)
         identity = dict(zip(group_columns, keys))
-        label = " · ".join(str(identity[column]) for column in group_columns)
-        axes[0].plot(curve["temps_h"], curve["DO_corr"], marker="o", markersize=2, label=label)
-        axes[1].plot(curve["temps_h"], curve["Lum_norm"], marker="o", markersize=2, label=label)
+        strain = str(identity.get("souche", _series_label(curve.iloc[0])))
+        label = strain if strain not in labelled_strains else "_nolegend_"
+        color = strain_colors[strain]
+        axes[0].plot(curve["temps_h"], curve["DO_corr"], marker="o", markersize=2,
+                     color=color, alpha=.75, label=label)
+        axes[1].plot(curve["temps_h"], curve["Lum_norm"], marker="o", markersize=2,
+                     color=color, alpha=.75, label=label)
+        labelled_strains.add(strain)
         selected = series_metrics
         for column, value in identity.items():
             selected = selected.loc[selected[column].eq(value)]
@@ -383,5 +400,7 @@ def plot_kinetics(data: pd.DataFrame, series_metrics: pd.DataFrame):
     axes[1].set(title="Luminescence et pic", xlabel="Temps (h)", ylabel="Luminescence normalisée")
     for axis in axes:
         axis.grid(alpha=0.2)
-        axis.legend(fontsize="x-small", loc="best")
+        handles, labels = axis.get_legend_handles_labels()
+        if handles:
+            axis.legend(handles, labels, title="Souche", fontsize="small", loc="best")
     return figure

@@ -148,8 +148,47 @@ with guided_tab:
                     with result_tabs[2]:
                         st.dataframe(complete.kinetics.series_metrics, use_container_width=True, hide_index=True)
                     with result_tabs[3]:
-                        st.pyplot(plot_kinetics(complete.normalization.normalized_data,
-                                                complete.kinetics.series_metrics), use_container_width=True)
+                        st.caption(
+                            "Choisissez les figures à afficher : elles sont régénérées dès qu'une option change, "
+                            "sans relancer l'analyse."
+                        )
+                        guided_family_labels = {
+                            "Croissance corrigée": "growth",
+                            "Luminescence normalisée": "normalized",
+                            "Double axe DO + luminescence": "mixed",
+                            "Pic normalisé": "peak",
+                            "AUC normalisée": "auc",
+                            "Temps de doublement": "doubling",
+                        }
+                        guided_figure_labels = st.multiselect(
+                            "Figures finales", list(guided_family_labels),
+                            default=list(guided_family_labels), key="guided_figure_families",
+                        )
+                        guided_options = st.columns(3)
+                        guided_panel_label = guided_options[0].selectbox(
+                            "Organisation des panneaux", ["Panneaux par milieu", "Panneaux par souche"],
+                            key="guided_figure_panels",
+                        )
+                        guided_lum_label = guided_options[1].selectbox(
+                            "Luminescence", ["Linéaire", "Logarithmique"], key="guided_figure_lum_scale",
+                        )
+                        guided_norm_label = guided_options[2].selectbox(
+                            "Lum/DO", ["Linéaire", "Logarithmique"], key="guided_figure_norm_scale",
+                        )
+                        if not guided_figure_labels:
+                            st.info("Sélectionnez au moins une figure finale.")
+                        else:
+                            guided_figures = build_publication_figures(
+                                complete.normalization.normalized_data,
+                                title="Analyse complète",
+                                families=tuple(guided_family_labels[label] for label in guided_figure_labels),
+                                panel_by="Groupe" if guided_panel_label.endswith("milieu") else "souche",
+                                lum_scale="log" if guided_lum_label == "Logarithmique" else "linear",
+                                normalized_scale="log" if guided_norm_label == "Logarithmique" else "linear",
+                            )
+                            for guided_name, guided_figure in guided_figures:
+                                st.subheader(guided_name.replace("_", " ").title())
+                                st.pyplot(guided_figure, use_container_width=True)
                     base = guided_uploads[0].name.rsplit(".", 1)[0] if len(guided_uploads) == 1 else "analyse_multi_fichiers"
                     exports = st.columns(3)
                     exports[0].download_button("Données finales", complete.normalization.normalized_data.to_csv(
