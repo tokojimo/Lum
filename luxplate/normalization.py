@@ -165,18 +165,22 @@ def normalize_luminescence_by_od(
     experience = output["experience_id"] if "experience_id" in output else pd.Series("", index=output.index)
     output["blank_threshold"] = experience.map(threshold_map)
     output["minimum_od"] = float(minimum_od)
-    reasons = []
-    for row in output.itertuples(index=False):
-        kind, od, lum = row.type, row.DO_corr, row.Lum_corr
-        if kind != "souche": reason = "blank_row" if kind == "blanc" else "non_strain_row"
-        elif not np.isfinite(od): reason = "invalid_od"
-        elif od <= 0: reason = "non_positive_od"
-        elif not np.isfinite(lum): reason = "invalid_luminescence"
-        elif pd.isna(row.series_valid) or not bool(row.series_valid): reason = "series_not_validated"
-        elif row.temps_h < row.normalization_start_time_h: reason = "before_normalization_start"
-        elif od <= row.threshold_effective: reason = "od_not_above_threshold"
-        else: reason = ""
-        reasons.append(reason)
+    # Assign in reverse priority so the first failing rule in the scientific
+    # decision tree wins, without paying the cost of a Python loop per row.
+    reasons = np.full(len(output), "", dtype=object)
+    rules = (
+        (output["DO_corr"].le(output["threshold_effective"]), "od_not_above_threshold"),
+        (output["temps_h"].lt(output["normalization_start_time_h"]), "before_normalization_start"),
+        (output["series_valid"].isna() | ~output["series_valid"].fillna(False).astype(bool),
+         "series_not_validated"),
+        (~np.isfinite(output["Lum_corr"]), "invalid_luminescence"),
+        (output["DO_corr"].le(0), "non_positive_od"),
+        (~np.isfinite(output["DO_corr"]), "invalid_od"),
+        (output["type"].ne("souche"), "non_strain_row"),
+        (output["type"].eq("blanc"), "blank_row"),
+    )
+    for mask, reason in rules:
+        reasons[np.asarray(mask, dtype=bool)] = reason
     output["normalization_reason"] = reasons
     output["normalization_ok"] = output["normalization_reason"].eq("")
     output["Lum_norm"] = np.nan

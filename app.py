@@ -19,6 +19,40 @@ from luxplate.workflow import (build_bulk_point_decisions, build_manual_decision
                                filter_experiment_data, run_complete_analysis)
 
 st.set_page_config(page_title="LuxPlate Analyzer", page_icon="🧫", layout="wide")
+
+
+@st.cache_data(show_spinner=False)
+def cached_workbook_sheets(payload: bytes) -> tuple[str, list[str]]:
+    """Inspect an uploaded workbook only once across Streamlit reruns."""
+    return inspect_workbook(BytesIO(payload))
+
+
+@st.cache_data(show_spinner=False)
+def cached_kinetic_workbook(payload: bytes, luminescence_sheet: str) -> pd.DataFrame:
+    """Parse an unchanged workbook/sheet selection only once."""
+    return parse_kinetic_workbook(BytesIO(payload), luminescence_sheet)
+
+
+@st.cache_data(show_spinner="Analyse en cours…")
+def cached_complete_analysis(
+    data: pd.DataFrame,
+    decisions: pd.DataFrame,
+    minimum_od: float,
+    consecutive_points: int,
+    growth_window_points: int,
+    growth_rate_min_r_squared: float,
+):
+    """Reuse a complete run when neither its data nor its settings changed."""
+    return run_complete_analysis(
+        data,
+        decisions,
+        minimum_od=minimum_od,
+        consecutive_points=consecutive_points,
+        growth_window_points=growth_window_points,
+        growth_rate_min_r_squared=growth_rate_min_r_squared,
+    )
+
+
 st.title("LuxPlate Analyzer")
 st.caption("Du classeur Varioskan brut aux données contrôlées, analysées et visualisées.")
 
@@ -45,10 +79,10 @@ with guided_tab:
             guided_identity = []
             for file_index, upload in enumerate(guided_uploads):
                 payload = upload.getvalue()
-                _, lum_sheets = inspect_workbook(BytesIO(payload))
+                _, lum_sheets = cached_workbook_sheets(payload)
                 lum = st.selectbox(f"Luminescence — {upload.name}", lum_sheets,
                                    key=f"guided_lum_{file_index}_{upload.name}")
-                guided_inputs.append((upload.name, parse_kinetic_workbook(BytesIO(payload), lum)))
+                guided_inputs.append((upload.name, cached_kinetic_workbook(payload, lum)))
                 guided_identity.append((upload.name, hash(payload), lum))
             guided_data = combine_kinetic_tables(guided_inputs)
         except Exception as error:
@@ -164,10 +198,9 @@ with guided_tab:
                             [manual_decisions, bulk_decisions], ignore_index=True
                         ).drop_duplicates("decision_id")
                     try:
-                        complete = run_complete_analysis(
-                            guided_selected, manual_decisions, minimum_od=float(guided_min_od),
-                            consecutive_points=int(guided_consecutive), growth_window_points=int(guided_window),
-                            growth_rate_min_r_squared=float(guided_r2),
+                        complete = cached_complete_analysis(
+                            guided_selected, manual_decisions, float(guided_min_od),
+                            int(guided_consecutive), int(guided_window), float(guided_r2),
                         )
                     except ValueError as error:
                         st.error(f"Analyse impossible : {error}")
@@ -271,11 +304,11 @@ with import_tab:
             parsed, source_identity = [], []
             for file_index, upload in enumerate(uploads):
                 payload = upload.getvalue()
-                absorbance_sheet, luminescence_sheets = inspect_workbook(BytesIO(payload))
+                absorbance_sheet, luminescence_sheets = cached_workbook_sheets(payload)
                 selected_luminescence = st.selectbox(
                     f"Luminescence — {upload.name} (absorbance : {absorbance_sheet})", luminescence_sheets,
                     key=f"import_lum_{file_index}_{upload.name}")
-                parsed.append((upload.name, parse_kinetic_workbook(BytesIO(payload), selected_luminescence)))
+                parsed.append((upload.name, cached_kinetic_workbook(payload, selected_luminescence)))
                 source_identity.append((upload.name, hash(payload), selected_luminescence))
             data = combine_kinetic_tables(parsed)
             previous_source = st.session_state.get("source_identity")
