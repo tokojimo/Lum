@@ -9,8 +9,9 @@ import streamlit as st
 from luxplate.blanks import run_blank_correction
 from luxplate.normalization import run_normalization
 from luxplate.kinetics import run_kinetics
-from luxplate.plotting import (plot_blank_correction, plot_kinetics, plot_normalization,
-                               plot_qc_curves, plot_raw_curves)
+from luxplate.export import package_figures
+from luxplate.plotting import (build_publication_figures, plot_blank_correction, plot_kinetics,
+                               plot_normalization, plot_qc_curves, plot_raw_curves)
 from luxplate.qc import run_quality_control
 from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
 from luxplate.workflow import build_manual_decisions, filter_experiment_data, run_complete_analysis
@@ -19,9 +20,9 @@ st.set_page_config(page_title="LuxPlate Analyzer", page_icon="🧫", layout="wid
 st.title("LuxPlate Analyzer")
 st.caption("Du classeur Varioskan brut aux données contrôlées, analysées et visualisées.")
 
-guided_tab, import_tab, qc_tab, blanks_tab, normalization_tab, kinetics_tab = st.tabs(
+guided_tab, import_tab, qc_tab, blanks_tab, normalization_tab, kinetics_tab, figures_tab = st.tabs(
     ["▶ Analyse guidée", "1 · Import et mise en forme", "2 · Contrôle qualité", "3 · Correction des blancs",
-     "4 · Normalisation par la DO", "5 · Paramètres cinétiques"]
+     "4 · Normalisation par la DO", "5 · Paramètres cinétiques", "6 · Figures et export"]
 )
 
 with guided_tab:
@@ -372,6 +373,7 @@ with normalization_tab:
         except ValueError as error:
             st.error(f"Normalisation impossible : {error}")
         else:
+            st.session_state["normalization_result"] = normalization
             if not normalization.warnings.empty:
                 for message in normalization.warnings["message"]:
                     st.warning(message)
@@ -450,6 +452,39 @@ with kinetics_tab:
                     table.to_csv(index=False).encode("utf-8-sig"),
                     file_name=f"{base}_cinetique_{suffix}.csv", mime="text/csv")
 
-st.divider()
-st.subheader("Étapes suivantes")
-st.write("Statistiques biologiques → figures finales.")
+with figures_tab:
+    st.header("6 · Figures finales et export publication")
+    st.write(
+        "Cette galerie reprend le style des scripts d'exemple : panneaux par milieu, courbes individuelles "
+        "discrètes, moyenne mise en avant et ruban ± écart-type. L'archive contient chaque figure en PNG "
+        "600 dpi et en PDF vectoriel."
+    )
+    if "normalization_result" not in st.session_state:
+        st.info("Exécutez d'abord la normalisation dans l'onglet 4.")
+    else:
+        figure_title = st.text_input(
+            "Titre commun des figures", value=st.session_state.get("source_name", "Analyse LuxPlate")
+        )
+        if st.button("Préparer la galerie", type="primary"):
+            with st.spinner("Création des figures haute résolution…"):
+                figures = build_publication_figures(
+                    st.session_state["normalization_result"].normalized_data, title=figure_title
+                )
+                rendered, archive = package_figures(figures, dpi=600)
+                st.session_state["publication_export"] = (figures, rendered, archive)
+        if "publication_export" in st.session_state:
+            figures, rendered, archive = st.session_state["publication_export"]
+            st.success(f"{len(rendered)} figure(s) préparée(s), dans deux formats chacune.")
+            st.download_button("Télécharger toutes les figures (.zip)", archive,
+                               file_name=f"{st.session_state.get('source_name', 'analyse')}_figures.zip",
+                               mime="application/zip", type="primary")
+            for (name, figure), item in zip(figures, rendered):
+                st.subheader(name.replace("_", " ").title())
+                st.pyplot(figure, use_container_width=True)
+                png_column, pdf_column = st.columns(2)
+                png_column.download_button(
+                    "PNG · 600 dpi", item.png, f"{item.name}.png", "image/png", key=f"png_{item.name}"
+                )
+                pdf_column.download_button(
+                    "PDF · vectoriel", item.pdf, f"{item.name}.pdf", "application/pdf", key=f"pdf_{item.name}"
+                )
