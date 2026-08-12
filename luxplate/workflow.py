@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pandas as pd
@@ -134,12 +135,20 @@ def run_complete_analysis(
     growth_window_min_duration_h: float = 0.0,
     growth_rate_min_r_squared: float = 0.0,
     minimum_auc_points: int = 2,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> CompleteAnalysisResult:
     """Run blank correction, normalization and kinetics with one explicit action."""
+    def report(percent: int, message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(percent, message)
+
+    report(5, "Préparation des données…")
     correction = run_blank_correction(data, decisions)
+    report(35, "Correction des blancs terminée")
     normalization = run_normalization(
         correction.corrected_data, blank_sd_multiplier, minimum_od, consecutive_points
     )
+    report(70, "Normalisation terminée")
     kinetics = run_kinetics(
         normalization.normalized_data,
         growth_window_points=growth_window_points,
@@ -147,4 +156,5 @@ def run_complete_analysis(
         growth_window_min_duration_h=growth_window_min_duration_h,
         growth_rate_min_r_squared=growth_rate_min_r_squared,
     )
+    report(100, "Calcul des paramètres cinétiques terminé")
     return CompleteAnalysisResult(correction, normalization, kinetics)
