@@ -1,56 +1,60 @@
-"""Biological-replicate-aware inference boundary.
+"""Biological-replicate-aware directional inference.
 
-Technical wells are deliberately collapsed before inference.  This prevents
-pseudoreplication while still allowing the plotting layer to display every well.
+Technical wells must be collapsed before calling this module.  Consequently,
+every row supplied to the test represents one independent biological block.
 """
 
 from __future__ import annotations
 
-from itertools import combinations
-
 import numpy as np
 import pandas as pd
-from scipy.stats import friedmanchisquare, wilcoxon
+from scipy.stats import ttest_rel
 
 
 RESULT_COLUMNS = ["condition_1", "condition_2", "n_pairs", "p_raw", "p_holm"]
 
 
-def paired_nonparametric_tests(
+def paired_directional_t_tests(
     biological: pd.DataFrame, *, value: str, condition: str = "souche",
     identity: tuple[str, ...] = ("experience_id", "replicat", "Groupe"),
-    comparisons: tuple[tuple[str, str], ...] | None = None,
-) -> tuple[float, pd.DataFrame]:
-    """Return a Friedman p-value and Holm-adjusted paired Wilcoxon comparisons.
+    comparisons: tuple[tuple[str, str], ...] = (),
+) -> pd.DataFrame:
+    """Test explicitly requested ``left > right`` hypotheses on log10 values.
 
-    Only complete biological blocks are used.  With fewer than three complete
-    blocks, inferential p-values are not reported because such tests would be
-    uninformative for a publication figure.
+    A paired, one-tailed t-test is calculated only for positive, complete
+    biological pairs.  Holm adjustment treats all requested, estimable
+    contrasts as one comparison family.  With no pre-specified hypotheses no
+    inferential test is performed.
     """
-    ids = [column for column in identity if column in biological and biological[column].notna().any()]
+    ids = [column for column in identity
+           if column in biological and biological[column].notna().any()]
     ids = ids or [column for column in ("Groupe",) if column in biological]
-    if not ids or condition not in biological or value not in biological:
-        return np.nan, pd.DataFrame(columns=RESULT_COLUMNS)
-    table = biological.pivot_table(index=ids, columns=condition, values=value, aggfunc="mean").dropna()
-    if len(table) < 3 or table.shape[1] < 2:
-        return np.nan, pd.DataFrame(columns=RESULT_COLUMNS)
-    omnibus = float(friedmanchisquare(*(table[column] for column in table.columns)).pvalue) \
-        if table.shape[1] >= 3 else np.nan
-    rows = []
-    available_pairs = list(combinations(table.columns, 2))
-    if comparisons is not None:
-        requested = {frozenset(pair) for pair in comparisons}
-        available_pairs = [pair for pair in available_pairs if frozenset(pair) in requested]
-    for left, right in available_pairs:
-        try:
-            raw = float(wilcoxon(table[left], table[right], alternative="two-sided").pvalue)
-        except ValueError:
+    if not comparisons or not ids or condition not in biological or value not in biological:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
+
+    table = biological.pivot_table(index=ids, columns=condition, values=value, aggfunc="mean")
+    rows: list[dict[str, object]] = []
+    for left, right in comparisons:
+        if left not in table or right not in table or left == right:
+            continue
+        pairs = table[[left, right]].replace([np.inf, -np.inf], np.nan).dropna()
+        pairs = pairs.loc[pairs[left].gt(0) & pairs[right].gt(0)]
+        if len(pairs) < 3:
+            continue
+        result = ttest_rel(
+            np.log10(pairs[left].to_numpy(float)),
+            np.log10(pairs[right].to_numpy(float)),
+            alternative="greater",
+        )
+        raw = float(result.pvalue)
+        if not np.isfinite(raw):
             raw = 1.0
         rows.append({"condition_1": left, "condition_2": right,
-                     "n_pairs": len(table), "p_raw": raw})
+                     "n_pairs": len(pairs), "p_raw": raw})
+
     result = pd.DataFrame(rows)
     if result.empty:
-        return omnibus, pd.DataFrame(columns=RESULT_COLUMNS)
+        return pd.DataFrame(columns=RESULT_COLUMNS)
     order = result["p_raw"].sort_values().index
     adjusted = pd.Series(index=result.index, dtype=float)
     running = 0.0
@@ -59,4 +63,4 @@ def paired_nonparametric_tests(
         running = max(running, min(1.0, result.at[index, "p_raw"] * (total - rank)))
         adjusted.at[index] = running
     result["p_holm"] = adjusted
-    return omnibus, result
+    return result[RESULT_COLUMNS]

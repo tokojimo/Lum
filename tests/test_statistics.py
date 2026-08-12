@@ -1,46 +1,57 @@
+import numpy as np
 import pandas as pd
 import pytest
 
-from luxplate.statistics import paired_nonparametric_tests
+from luxplate.statistics import paired_directional_t_tests
 
 
-def test_paired_tests_use_complete_biological_blocks_and_holm_correction():
-    biological = pd.DataFrame([
-        {"experience_id": experiment, "replicat": 1, "souche": strain, "value": value}
-        for experiment, values in {
-            "E1": (1.0, 5.0, 9.0), "E2": (2.0, 6.0, 10.0), "E3": (3.0, 7.0, 11.0)
-        }.items()
-        for strain, value in zip(("P0-lux", "A-lux", "B-lux"), values)
-    ])
-
-    omnibus, comparisons = paired_nonparametric_tests(biological, value="value")
-
-    assert 0 <= omnibus <= 1
-    assert len(comparisons) == 3
-    assert comparisons["p_holm"].between(0, 1).all()
-    assert comparisons["n_pairs"].eq(3).all()
-
-
-def test_paired_tests_report_significance_for_a_clear_repeated_effect():
-    biological = pd.DataFrame([
+def _biological(values):
+    return pd.DataFrame([
         {"experience_id": experiment, "souche": strain, "value": value}
-        for experiment in range(10)
-        for strain, value in (("control", experiment), ("reporter", experiment + 10))
+        for experiment, row in enumerate(values, start=1)
+        for strain, value in zip(("control", "reporter", "other"), row)
     ])
 
-    _, comparisons = paired_nonparametric_tests(biological, value="value")
 
-    assert comparisons.loc[0, "p_raw"] == pytest.approx(0.001953125)
-    assert comparisons.loc[0, "p_holm"] < 0.05
-
-
-def test_paired_tests_do_not_claim_inference_below_three_biological_blocks():
-    biological = pd.DataFrame([
-        {"experience_id": "E1", "souche": "P0-lux", "value": 1.0},
-        {"experience_id": "E1", "souche": "A-lux", "value": 2.0},
+def test_directional_tests_use_log10_paired_biological_values_and_holm():
+    biological = _biological([
+        (10, 20, 11), (100, 210, 105), (1000, 2200, 1010), (10000, 23000, 9900)
     ])
+    comparisons = paired_directional_t_tests(
+        biological, value="value",
+        comparisons=(("reporter", "control"), ("other", "control")),
+    )
 
-    omnibus, comparisons = paired_nonparametric_tests(biological, value="value")
+    expected = pytest.importorskip("scipy.stats").ttest_rel(
+        np.log10([20, 210, 2200, 23000]), np.log10([10, 100, 1000, 10000]),
+        alternative="greater",
+    ).pvalue
+    assert comparisons.loc[0, "p_raw"] == pytest.approx(expected)
+    assert comparisons["p_holm"].between(0, 1).all()
+    assert comparisons["n_pairs"].eq(4).all()
 
-    assert pd.isna(omnibus)
-    assert comparisons.empty
+
+def test_direction_is_preserved_and_no_selection_means_no_test():
+    biological = _biological([(1, 2, 3), (2, 4, 6), (4, 9, 12)])
+    assert paired_directional_t_tests(biological, value="value").empty
+    forward = paired_directional_t_tests(
+        biological, value="value", comparisons=(("reporter", "control"),)
+    )
+    reverse = paired_directional_t_tests(
+        biological, value="value", comparisons=(("control", "reporter"),)
+    )
+    assert forward.loc[0, "p_raw"] < .05
+    assert reverse.loc[0, "p_raw"] > .95
+
+
+def test_nonpositive_values_are_excluded_and_three_pairs_are_required():
+    biological = _biological([(1, 2, 3), (2, 4, 6), (0, 8, 12), (4, 9, 12)])
+    comparisons = paired_directional_t_tests(
+        biological, value="value", comparisons=(("reporter", "control"),)
+    )
+    assert comparisons.loc[0, "n_pairs"] == 3
+
+    biological.loc[biological["experience_id"].eq(4) & biological["souche"].eq("control"), "value"] = 0
+    assert paired_directional_t_tests(
+        biological, value="value", comparisons=(("reporter", "control"),)
+    ).empty
