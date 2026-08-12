@@ -1,3 +1,5 @@
+import pickle
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -97,6 +99,18 @@ def test_linear_rlu_axes_use_scientific_notation_and_plain_title():
     assert legend.get_title().get_fontsize() == 18
     assert all(text.get_fontsize() == 14 for text in legend.get_texts())
     plt.close(figure)
+
+
+def test_linear_rlu_figures_can_be_cached_with_pickle():
+    figures = build_publication_figures(
+        _publication_table(), families=("corrected", "mixed")
+    )
+
+    cached = pickle.dumps(figures)
+
+    assert cached
+    for _, figure in figures:
+        plt.close(figure)
 
 
 def test_reporter_colors_are_fixed_across_order_and_figure_families():
