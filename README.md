@@ -143,6 +143,9 @@ boxplot reports the exact biological mean.
 Historical datasets that lack an explicit `experience_id` remain compatible:
 an `Experiment N | medium` group prefix is used as the independent-experiment
 identity, so technical wells cannot artificially narrow pooled SD error bars.
+That recovered identity is retained when the dual-axis growth/luminescence view
+pools groups by medium; its SD bars therefore use the same biological units as
+the corrected-luminescence mean-of-experiments recap.
 
 ## Export formats
 

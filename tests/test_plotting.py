@@ -507,6 +507,33 @@ def test_pooled_summary_uses_group_experiments_not_technical_wells_for_sd():
     assert summary.loc[0, "std"] == pytest.approx(np.std([2.3e6, 1.5e6, 4.4e6], ddof=1))
 
 
+def test_legacy_experiment_sd_survives_corrected_recap_and_mixed_pooling():
+    biological_values = (2.3e6, 1.5e6, 4.4e6)
+    data = pd.DataFrame([
+        {"Groupe": f"Experiment {experiment} | LB", "replicat": 1,
+         "sample_header": f"PspeD2-1A-{well}", "puits": well, "temps_h": 7.0,
+         "souche": "PspeD2-lux", "type": "souche", "DO_corr": od_value,
+         "Lum_corr": biological_value + technical_offset}
+        for experiment, (biological_value, od_value) in enumerate(
+            zip(biological_values, (.2, .4, .8)), start=1
+        )
+        for well, technical_offset in (("A1", -1e4), ("A2", 1e4))
+    ])
+
+    figures = dict(build_publication_figures(data, families=("corrected", "mixed")))
+    expected_sd = np.std(biological_values, ddof=1)
+
+    corrected = figures["luminescence_corrigee_moyenne_experiences"]
+    mixed = figures["croissance_luminescence_mixte"]
+    corrected_segment = corrected.axes[0].containers[0].lines[2][0].get_segments()[0]
+    lum_axis = next(axis for axis in mixed.axes if axis.get_ylabel() == "Luminescence (RLU)")
+    mixed_segment = lum_axis.containers[0].lines[2][0].get_segments()[0]
+    assert np.diff(corrected_segment[:, 1])[0] / 2 == pytest.approx(expected_sd)
+    assert np.diff(mixed_segment[:, 1])[0] / 2 == pytest.approx(expected_sd)
+    for figure in figures.values():
+        plt.close(figure)
+
+
 def test_metric_gallery_uses_boxplots_and_includes_peak_time():
     figures = build_publication_figures(_publication_table(), families=("peak", "peak_time", "auc", "doubling"),
                                         metric_scale="linear")

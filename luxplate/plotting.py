@@ -133,6 +133,15 @@ def _has_multiple_experiments(data: pd.DataFrame) -> bool:
 
 def _pooled_media(data: pd.DataFrame) -> pd.DataFrame:
     pooled = data.copy()
+    # Preserve the biological experiment encoded in legacy group labels before
+    # the mixed plot replaces ``Groupe`` with the pooled medium.  Otherwise the
+    # only experiment identifier is lost and technical wells can become the SD
+    # observations (or make an error bar incorrectly collapse to zero).
+    if "experience_id" not in pooled or not pooled["experience_id"].notna().any():
+        pooled["_experiment_from_group"] = pooled["Groupe"].astype(str).str.extract(
+            r"^\s*(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE,
+            expand=False,
+        ).str.casefold()
     pooled["Milieu"] = pooled["Groupe"].map(_medium_label)
     return pooled
 
@@ -228,13 +237,14 @@ def _aligned_biological_summary(data: pd.DataFrame, value: str,
     # wells as independent biological observations and shrink the recap SD.
     experiment_key = "experience_id"
     if experiment_key not in work or not work[experiment_key].notna().any():
-        group_experiment = work["Groupe"].astype(str).str.extract(
-            r"^\s*(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE,
-            expand=False,
-        ) if "Groupe" in work else pd.Series(index=work.index, dtype=object)
-        if group_experiment.notna().any():
-            experiment_key = "_experiment_from_group"
-            work[experiment_key] = group_experiment.str.casefold()
+        experiment_key = "_experiment_from_group"
+        if experiment_key not in work or not work[experiment_key].notna().any():
+            group_experiment = work["Groupe"].astype(str).str.extract(
+                r"^\s*(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE,
+                expand=False,
+            ) if "Groupe" in work else pd.Series(index=work.index, dtype=object)
+            if group_experiment.notna().any():
+                work[experiment_key] = group_experiment.str.casefold()
     biological_ids = [column for column in (experiment_key, "replicat")
                       if column in work and work[column].notna().any()]
     # A sample header is the safest fallback when biological metadata are absent.
