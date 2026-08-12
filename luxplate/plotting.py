@@ -199,6 +199,20 @@ def _aligned_biological_summary(data: pd.DataFrame, value: str,
     biological_ids = biological_ids or ["sample_header"]
     biological = (work.groupby([*biological_ids, "temps_aligne_h"], dropna=False)[value]
                    .mean().reset_index())
+
+    # Independent runs commonly start a few minutes apart.  A strict join on
+    # elapsed time would then put the corresponding measurements into separate
+    # bins: each bin can contain only one experiment and its SD becomes NaN
+    # (displayed as zero).  For a pooled recap, match the observed acquisition
+    # sequence instead.  This does not interpolate values: point k from every
+    # experiment is merely shown at the median observed time of point k.
+    if "experience_id" in biological and biological["experience_id"].nunique(dropna=True) > 1:
+        biological = biological.sort_values(["experience_id", "temps_aligne_h"])
+        biological["_acquisition"] = biological.groupby(
+            "experience_id", dropna=False
+        )["temps_aligne_h"].rank(method="dense").astype(int)
+        display_times = biological.groupby("_acquisition")["temps_aligne_h"].median()
+        biological["temps_aligne_h"] = biological["_acquisition"].map(display_times)
     return (biological.groupby("temps_aligne_h")[value].agg(["mean", "std", "count"])
             .rename(columns={"count": "n_biological"}).reset_index()
             .rename(columns={"temps_aligne_h": "temps_h"}))

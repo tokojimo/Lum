@@ -132,7 +132,10 @@ For publication time courses, acquisition times that differ by no more than one
 minute are assigned to the same observed timepoint. Technical wells are averaged
 within each experiment/biological replicate first; only then are the biological
 mean and SD calculated. This prevents artificial saw-tooth curves without
-interpolation or smoothing. The gallery includes corrected OD, non-normalized and
+interpolation or smoothing. In pooled experiment recaps, corresponding observed
+acquisitions are matched by sequence and displayed at their median elapsed time;
+this prevents small run-to-run clock offsets from hiding the between-experiment
+SD. The gallery includes corrected OD, non-normalized and
 normalized luminescence, a dual-axis OD/non-normalized-luminescence view, and
 boxplots for normalized peak, peak time, normalized AUC, and doubling time. Each
 boxplot reports the exact biological mean.

@@ -3,10 +3,12 @@ import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pytest
 from matplotlib.ticker import FuncFormatter
 
-from luxplate.plotting import (build_guided_raw_figures, build_publication_figures,
-                               metric_fold_change_vs_control, plot_kinetics, plot_metric_points, plot_mixed_panels,
+from luxplate.plotting import (_aligned_biological_summary, build_guided_raw_figures,
+                               build_publication_figures, metric_fold_change_vs_control,
+                               plot_kinetics, plot_metric_points, plot_mixed_panels,
                                plot_publication_panels)
 from test_workflow import workflow_table
 
@@ -452,6 +454,27 @@ def test_nearby_technical_times_are_aligned_before_biological_summary():
     assert len(reporter_lines) == 2
     assert all(len(line.get_xdata()) == 3 for line in reporter_lines)
     plt.close(figure)
+
+
+def test_pooled_summary_matches_acquisition_sequence_across_shifted_experiments():
+    first = _publication_table().query("souche == 'Reporter-lux'").assign(
+        experience_id="exp1", Lum_corr=lambda frame: frame["Lum_corr"] * 1.0
+    )
+    second = _publication_table().query("souche == 'Reporter-lux'").assign(
+        experience_id="exp2", temps_h=lambda frame: frame["temps_h"] + 0.05,
+        Lum_corr=lambda frame: frame["Lum_corr"] * 3.0,
+    )
+
+    summary = _aligned_biological_summary(pd.concat([first, second]), "Lum_corr")
+
+    # The three corresponding acquisitions have N=2 and retain the genuine
+    # between-experiment dispersion despite their three-minute clock offset.
+    assert summary["n_biological"].tolist() == [2, 2, 2]
+    assert summary["std"].tolist() == pytest.approx([
+        np.std([120, 360], ddof=1),
+        np.std([170, 510], ddof=1),
+        np.std([220, 660], ddof=1),
+    ])
 
 
 def test_metric_gallery_uses_boxplots_and_includes_peak_time():
