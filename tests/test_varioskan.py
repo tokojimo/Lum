@@ -86,6 +86,30 @@ def test_medium_prefix_is_separated_and_numbered_blank_is_associated():
     assert blanks["Groupe"].unique().tolist() == ["SCFM2 (Po)"]
 
 
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("14.1Ac attB::MiniCTXlux(PspeD2-1A-lux) (A01)", "14.1Ac attB::PspeD2-1A-lux"),
+        ("14.1Ac attB::PspeD2-1A-Lux (A01)", "14.1Ac attB::PspeD2-1A-lux"),
+        ("14.1Ac attB::PspeD2-1A-lux (A01)", "14.1Ac attB::PspeD2-1A-lux"),
+        ("14.1Ac attB::MiniCTXlux(P0-lux) (A01)", "14.1Ac attB::P0-lux"),
+    ],
+)
+def test_equivalent_lux_reporter_spellings_share_a_canonical_strain(header, expected):
+    source = synthetic_workbook()
+    workbook = load_workbook(source)
+    for sheet_name in ("Absorbance 600", "Luminescence 1"):
+        sheet = workbook[sheet_name]
+        sheet.cell(2, 3).value = header
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+
+    result = parse_kinetic_workbook(output)
+
+    assert result.loc[result["puits"].eq("A01"), "souche"].unique().tolist() == [expected]
+
+
 def test_combining_workbooks_namespaces_internal_blank_links():
     first = parse_kinetic_workbook(synthetic_workbook())
     second = parse_kinetic_workbook(synthetic_workbook())
