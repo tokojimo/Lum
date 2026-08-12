@@ -193,7 +193,20 @@ def _aligned_biological_summary(data: pd.DataFrame, value: str,
             clusters[-1].append(float(time))
     lookup = {time: float(np.median(cluster)) for cluster in clusters for time in cluster}
     work["temps_aligne_h"] = pd.to_numeric(work["temps_h"]).map(lookup)
-    biological_ids = [column for column in ("experience_id", "replicat")
+    # Some historical imports identify independent runs only in Groupe (for
+    # example ``Experiment 2 | LB``).  Recover that identity before pooling;
+    # otherwise the sample-header fallback would incorrectly treat technical
+    # wells as independent biological observations and shrink the recap SD.
+    experiment_key = "experience_id"
+    if experiment_key not in work or not work[experiment_key].notna().any():
+        group_experiment = work["Groupe"].astype(str).str.extract(
+            r"^\s*(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE,
+            expand=False,
+        ) if "Groupe" in work else pd.Series(index=work.index, dtype=object)
+        if group_experiment.notna().any():
+            experiment_key = "_experiment_from_group"
+            work[experiment_key] = group_experiment.str.casefold()
+    biological_ids = [column for column in (experiment_key, "replicat")
                       if column in work and work[column].notna().any()]
     # A sample header is the safest fallback when biological metadata are absent.
     biological_ids = biological_ids or ["sample_header"]
@@ -206,10 +219,10 @@ def _aligned_biological_summary(data: pd.DataFrame, value: str,
     # (displayed as zero).  For a pooled recap, match the observed acquisition
     # sequence instead.  This does not interpolate values: point k from every
     # experiment is merely shown at the median observed time of point k.
-    if "experience_id" in biological and biological["experience_id"].nunique(dropna=True) > 1:
-        biological = biological.sort_values(["experience_id", "temps_aligne_h"])
+    if experiment_key in biological and biological[experiment_key].nunique(dropna=True) > 1:
+        biological = biological.sort_values([experiment_key, "temps_aligne_h"])
         biological["_acquisition"] = biological.groupby(
-            "experience_id", dropna=False
+            experiment_key, dropna=False
         )["temps_aligne_h"].rank(method="dense").astype(int)
         display_times = biological.groupby("_acquisition")["temps_aligne_h"].median()
         biological["temps_aligne_h"] = biological["_acquisition"].map(display_times)
