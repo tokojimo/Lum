@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -29,6 +31,13 @@ def test_directional_tests_use_log10_paired_biological_values_and_holm():
     assert comparisons.loc[0, "p_raw"] == pytest.approx(expected)
     assert comparisons["p_holm"].between(0, 1).all()
     assert comparisons["n_pairs"].eq(4).all()
+    assert comparisons.loc[0, "test"] == "paired t-test"
+    assert comparisons.loc[0, "degrees_freedom"] == 3
+    assert comparisons.loc[0, "holm_family_size"] == 2
+    pairs = json.loads(comparisons.loc[0, "paired_values_json"])
+    assert len(pairs) == 4
+    assert pairs[0]["condition_1_value"] == 20.0
+    assert pairs[0]["condition_2_log10"] == 1.0
 
 
 def test_direction_is_preserved_and_no_selection_means_no_test():

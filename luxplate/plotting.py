@@ -570,14 +570,7 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     for level, comparison in enumerate(usable.itertuples(index=False), start=1):
         left, right = positions[comparison.condition_1], positions[comparison.condition_2]
         y = .60 + spacing * level
-        p = comparison.p_holm
-        value_label = "< 0.0001" if p < .0001 else f"= {p:.3g}"
-        # Stars are based on the multiplicity-adjusted value.  Showing both
-        # values makes it clear when a raw result loses significance after the
-        # Holm correction instead of making every such result look erroneous.
-        raw_label = "NA" if not np.isfinite(comparison.p_raw) else f"{comparison.p_raw:.3g}"
-        p_label = (f"paired one-tailed t (log10): pHolm {value_label} "
-                   f"{_significance_stars(p)} (raw {raw_label}; n={comparison.n_pairs})")
+        p_label = _significance_stars(comparison.p_holm)
         axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
                   transform=transform, color="#333333", lw=.7, clip_on=False)
         axis.text((left + right) / 2, y + .006, p_label, transform=transform,

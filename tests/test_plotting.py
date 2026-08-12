@@ -357,8 +357,7 @@ def test_metric_points_make_one_panel_per_medium_and_label_pvalues_with_stars():
     assert len(figure.axes) == 2
     assert [axis.get_title() for axis in figure.axes] == ["DMEM", "SCFM2"]
     labels = [text.get_text() for axis in figure.axes for text in axis.texts]
-    assert any(label.startswith("paired one-tailed t (log10): pHolm")
-               and "(raw " in label for label in labels)
+    assert any(label in {"ns", "*", "**", "***", "****"} for label in labels)
     plt.close(figure)
 
 
@@ -404,7 +403,7 @@ def test_metric_points_only_draws_selected_directional_hypotheses():
     comparison = selected._luxplate_statistics.iloc[0]
     assert (comparison.condition_1, comparison.condition_2) == conditions[0]
     labels = [text.get_text() for text in selected.axes[0].texts
-              if text.get_text().startswith("paired one-tailed t")]
+              if text.get_text() in {"ns", "*", "**", "***", "****"}]
     assert len(labels) == 1
     plt.close(selected)
 

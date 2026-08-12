@@ -909,9 +909,27 @@ with figures_tab:
                 st.stop()
             figures, rendered, archive, rendered_dpi = st.session_state["publication_export"]
             st.success(f"{len(rendered)} figure(s) préparée(s), dans quatre formats chacune.")
-            st.download_button("Télécharger toutes les figures (.zip)", archive,
-                               file_name=f"{st.session_state.get('source_name', 'analyse')}_figures.zip",
-                               mime="application/zip", type="primary")
+            statistics_tables = []
+            for figure_name, figure in figures:
+                table = getattr(figure, "_luxplate_statistics", pd.DataFrame())
+                if not table.empty:
+                    statistics_tables.append(table.assign(figure=figure_name))
+            statistics_export = (pd.concat(statistics_tables, ignore_index=True)
+                                 if statistics_tables else pd.DataFrame())
+            download_columns = st.columns(2)
+            download_columns[0].download_button(
+                "Télécharger toutes les figures (.zip)", archive,
+                file_name=f"{st.session_state.get('source_name', 'analyse')}_figures.zip",
+                mime="application/zip", type="primary",
+            )
+            download_columns[1].download_button(
+                "Télécharger les tests statistiques (.csv)",
+                statistics_export.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"{st.session_state.get('source_name', 'analyse')}_tests_statistiques.csv",
+                mime="text/csv", disabled=statistics_export.empty,
+                help=("Un test par ligne, avec méthode, statistique t, degrés de liberté, p brute, "
+                      "p corrigée, famille de Holm et valeurs appariées permettant de refaire le test."),
+            )
             for (name, figure), item in zip(figures, rendered):
                 st.subheader(name.replace("_", " ").title())
                 st.pyplot(figure, use_container_width=True)

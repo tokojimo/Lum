@@ -6,12 +6,31 @@ every row supplied to the test represents one independent biological block.
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 from scipy.stats import ttest_rel
 
 
-RESULT_COLUMNS = ["condition_1", "condition_2", "n_pairs", "p_raw", "p_holm"]
+RESULT_COLUMNS = [
+    "condition_1", "condition_2", "test", "alternative", "transformation",
+    "value_column", "pairing_columns", "n_pairs", "statistic_t", "degrees_freedom",
+    "mean_log10_difference", "p_raw", "p_holm", "holm_family_size", "alpha",
+    "significance", "paired_values_json",
+]
+
+
+def _significance(p_value: float) -> str:
+    if p_value < .0001:
+        return "****"
+    if p_value < .001:
+        return "***"
+    if p_value < .01:
+        return "**"
+    if p_value < .05:
+        return "*"
+    return "ns"
 
 
 def paired_directional_t_tests(
@@ -49,8 +68,28 @@ def paired_directional_t_tests(
         raw = float(result.pvalue)
         if not np.isfinite(raw):
             raw = 1.0
-        rows.append({"condition_1": left, "condition_2": right,
-                     "n_pairs": len(pairs), "p_raw": raw})
+        paired_records = []
+        for pair_identity, pair_values in pairs.iterrows():
+            identity_values = pair_identity if isinstance(pair_identity, tuple) else (pair_identity,)
+            paired_records.append({
+                **{column: value for column, value in zip(ids, identity_values)},
+                "condition_1_value": float(pair_values[left]),
+                "condition_2_value": float(pair_values[right]),
+                "condition_1_log10": float(np.log10(pair_values[left])),
+                "condition_2_log10": float(np.log10(pair_values[right])),
+            })
+        rows.append({
+            "condition_1": left, "condition_2": right,
+            "test": "paired t-test", "alternative": "condition_1 > condition_2",
+            "transformation": "log10", "value_column": value,
+            "pairing_columns": "|".join(ids), "n_pairs": len(pairs),
+            "statistic_t": float(result.statistic), "degrees_freedom": len(pairs) - 1,
+            "mean_log10_difference": float(
+                (np.log10(pairs[left]) - np.log10(pairs[right])).mean()
+            ),
+            "p_raw": raw, "alpha": .05,
+            "paired_values_json": json.dumps(paired_records, ensure_ascii=False, default=str),
+        })
 
     result = pd.DataFrame(rows)
     if result.empty:
@@ -63,4 +102,6 @@ def paired_directional_t_tests(
         running = max(running, min(1.0, result.at[index, "p_raw"] * (total - rank)))
         adjusted.at[index] = running
     result["p_holm"] = adjusted
+    result["holm_family_size"] = total
+    result["significance"] = result["p_holm"].map(_significance)
     return result[RESULT_COLUMNS]
