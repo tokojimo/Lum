@@ -143,6 +143,25 @@ def test_mixed_panels_share_od_and_luminescence_limits_across_media():
     plt.close(figure)
 
 
+def test_time_course_panels_end_at_shortest_experiment_duration():
+    short = _publication_table().assign(experience_id="short")
+    long = pd.concat([
+        _publication_table().assign(experience_id="long"),
+        _publication_table().query("temps_h == 2").assign(
+            temps_h=4.0, experience_id="long"
+        ),
+    ], ignore_index=True)
+    data = pd.concat([short, long], ignore_index=True)
+
+    publication = plot_publication_panels(data, value="Lum_corr", group_by="souche")
+    mixed = plot_mixed_panels(data)
+
+    assert all(axis.get_xlim()[1] == 2.0 for axis in publication.axes)
+    assert all(axis.get_xlim()[1] == 2.0 for axis in mixed.axes)
+    plt.close(publication)
+    plt.close(mixed)
+
+
 def test_linear_rlu_axes_use_scientific_notation_and_plain_title():
     figure = plot_publication_panels(_publication_table(), value="Lum_corr", title="Luminescence")
     axis = figure.axes[0]

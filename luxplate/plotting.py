@@ -107,6 +107,34 @@ def _pooled_media(data: pd.DataFrame) -> pd.DataFrame:
     return pooled
 
 
+def _shortest_experiment_end(data: pd.DataFrame) -> float | None:
+    """Return the earliest final acquisition time across experiments.
+
+    Comparing curves beyond the end of the shortest experiment can make panels
+    visually misleading.  Keep the full data for summaries, but use this value
+    as the common right-hand x limit of every time-course panel.
+    """
+    times = pd.to_numeric(data.get("temps_h"), errors="coerce")
+    finite = times[np.isfinite(times)]
+    if finite.empty:
+        return None
+    for column in ("experience_id", "experience"):
+        if column in data and data[column].notna().any():
+            ends = (pd.DataFrame({"experiment": data[column], "time": times})
+                    .dropna().groupby("experiment", dropna=False)["time"].max())
+            if not ends.empty:
+                return float(ends.min())
+    return float(finite.max())
+
+
+def _set_common_time_end(axes, data: pd.DataFrame) -> None:
+    """Give time-course axes the end time of the shortest experiment."""
+    time_end = _shortest_experiment_end(data)
+    if time_end is not None:
+        for axis in axes:
+            axis.set_xlim(right=time_end)
+
+
 def _strain_colors(data: pd.DataFrame) -> dict[str, str]:
     """Assign stable reporter colors, including across data order and releases."""
     strains = list(dict.fromkeys(data["souche"].dropna().astype(str)))
@@ -235,6 +263,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         shared_limits = (float(np.nanmin(limits[:, 0])), float(np.nanmax(limits[:, 1])))
         for axis in visible_axes:
             axis.set_ylim(shared_limits)
+        _set_common_time_end(visible_axes, work)
     figure.subplots_adjust(top=axes_top, bottom=0.12, hspace=0.48, wspace=0.34)
     return figure
 
@@ -326,6 +355,7 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
         shared_limits = (float(np.nanmin(limits[:, 0])), float(np.nanmax(limits[:, 1])))
         for axis in measurement_axes:
             axis.set_ylim(shared_limits)
+    _set_common_time_end(od_axes, work)
     for panel_index in range(len(panels), blocks * ncols):
         block, column = divmod(panel_index, ncols)
         axes[block, column].remove()
