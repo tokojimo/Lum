@@ -51,6 +51,12 @@ for exclusion, then run blank correction, OD normalization and kinetic extractio
 with one button. The source workbook is never modified, and the final data,
 kinetic metrics and exclusion journal can be downloaded separately.
 
+The **Projet** panel in the sidebar exports the current scientific state as a
+portable `.luxplate` file. Re-importing it restores the long data, validated QC
+decisions and computed results, allowing an analysis to continue after the
+browser session or application has closed. Archives use validated JSON tables,
+not executable pickle files.
+
 ## Workflow
 
 1. Import

@@ -15,6 +15,7 @@ from luxplate.plotting import (build_guided_raw_figures, build_publication_figur
                                directional_condition_options, plot_blank_correction, plot_kinetics,
                                plot_normalization, plot_qc_curves, plot_raw_curves)
 from luxplate.qc import run_quality_control
+from luxplate.project import export_project, import_project
 from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
 from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
                                filter_experiment_data, run_complete_analysis)
@@ -221,6 +222,36 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
 st.title("LuxPlate Analyzer")
 st.caption("Du classeur Varioskan brut aux données contrôlées, analysées et visualisées.")
 
+with st.sidebar:
+    st.header("💾 Projet")
+    st.caption("Sauvegardez l'analyse pour la reprendre après avoir fermé votre session.")
+    project_upload = st.file_uploader(
+        "Importer un projet LuxPlate (.luxplate)", type=["luxplate"], key="project_upload",
+    )
+    if project_upload is not None:
+        payload = project_upload.getvalue()
+        project_identity = (project_upload.name, len(payload), hash(payload))
+        if st.session_state.get("loaded_project_identity") != project_identity:
+            try:
+                restored_state = import_project(payload)
+            except ValueError as error:
+                st.error(f"Import du projet impossible : {error}")
+            else:
+                for key, value in restored_state.items():
+                    st.session_state[key] = value
+                st.session_state["loaded_project_identity"] = project_identity
+                st.success("Projet restauré. Vous pouvez reprendre l'analyse dans les onglets.")
+                st.rerun()
+    if "long_data" in st.session_state or "guided_complete_result" in st.session_state:
+        project_name = st.session_state.get("source_name", "analyse")
+        st.download_button(
+            "Exporter le projet", export_project(dict(st.session_state)),
+            file_name=f"{project_name}.luxplate", mime="application/zip", type="primary",
+            help="Inclut les données importées, décisions QC et résultats de calcul.",
+        )
+    else:
+        st.info("Importez des données pour activer l'export du projet.")
+
 guided_tab, import_tab, qc_tab, blanks_tab, normalization_tab, kinetics_tab, figures_tab = st.tabs(
     ["▶ Analyse guidée", "1 · Import et mise en forme", "2 · Contrôle qualité", "3 · Correction des blancs",
      "4 · Normalisation par la DO", "5 · Paramètres cinétiques", "6 · Figures et export"]
@@ -237,7 +268,12 @@ with guided_tab:
         accept_multiple_files=True, key="guided_upload"
     )
     if not guided_uploads:
-        st.info("Les fichiers restent traités localement par l'application.")
+        if "long_data" in st.session_state:
+            st.success(
+                "Projet chargé : vos données sont restaurées. Reprenez les modifications dans les onglets 2 à 6."
+            )
+        else:
+            st.info("Les fichiers restent traités localement par l'application.")
     else:
         try:
             guided_inputs = []
@@ -391,6 +427,11 @@ with guided_tab:
                         analysis_progress.empty()
                         st.session_state["guided_complete_result"] = complete
                         st.session_state["guided_decisions"] = manual_decisions
+                        st.session_state["long_data"] = guided_selected.copy(deep=True)
+                        st.session_state["source_name"] = (
+                            guided_uploads[0].name.rsplit(".", 1)[0]
+                            if len(guided_uploads) == 1 else "analyse_multi_fichiers"
+                        )
 
                 if "guided_complete_result" in st.session_state:
                     complete = st.session_state["guided_complete_result"]
@@ -532,7 +573,11 @@ with import_tab:
                                accept_multiple_files=True)
 
     if not uploads:
-        st.info("Chargez un ou plusieurs classeurs pour choisir la lecture de luminescence et inspecter les données brutes.")
+        if "long_data" in st.session_state:
+            st.success("Les données longues du projet ont été restaurées ; poursuivez dans l'onglet 2.")
+            st.dataframe(st.session_state["long_data"], use_container_width=True, hide_index=True)
+        else:
+            st.info("Chargez un ou plusieurs classeurs pour choisir la lecture de luminescence et inspecter les données brutes.")
     else:
         try:
             parsed, source_identity = [], []
