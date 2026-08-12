@@ -28,6 +28,42 @@ def test_guided_raw_figures_group_technical_replicates_in_one_biological_row():
         plt.close(figure)
 
 
+def test_guided_raw_legend_identifies_each_technical_well_position():
+    data = workflow_table()
+
+    blank_figure = build_guided_raw_figures(data, sample_type="blanc")[0][1]
+    sample_figure = build_guided_raw_figures(data, sample_type="souche")[0][1]
+
+    assert [text.get_text() for text in blank_figure.axes[0].get_legend().get_texts()] == [
+        "Rép. technique (B01)"
+    ]
+    assert [text.get_text() for text in sample_figure.axes[0].get_legend().get_texts()] == [
+        "Rép. technique (A01)"
+    ]
+    plt.close(blank_figure)
+    plt.close(sample_figure)
+
+
+def test_guided_raw_figures_order_media_before_biological_conditions():
+    # Workbook-major input must not result in M1/bio1, M2/bio1, M1/bio2, M2/bio2.
+    first = pd.concat([
+        workflow_table().query("type == 'souche'").iloc[:4].assign(Groupe=medium, souche="Bio 1")
+        for medium in ("M1", "M2")
+    ])
+    second = pd.concat([
+        workflow_table().query("type == 'souche'").iloc[:4].assign(Groupe=medium, souche="Bio 2")
+        for medium in ("M1", "M2")
+    ])
+
+    figures = build_guided_raw_figures(pd.concat([first, second]), sample_type="souche")
+
+    assert [title for title, _ in figures] == [
+        "M1 · Bio 1", "M1 · Bio 2", "M2 · Bio 1", "M2 · Bio 2",
+    ]
+    for _, figure in figures:
+        plt.close(figure)
+
+
 def test_guided_raw_figures_put_excel_experiments_on_rows_with_shared_scales():
     first = workflow_table().assign(experience="Expérience 1", Groupe="exp1|M1")
     second = workflow_table().assign(
