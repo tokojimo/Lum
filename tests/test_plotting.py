@@ -454,6 +454,44 @@ def test_experiment_and_pooled_panel_labels_preserve_medium_parentheses():
         plt.close(item)
 
 
+def test_long_medium_names_wrap_in_time_course_panel_titles():
+    medium = "Experiment 1 | DMEM-KPI (62mM) + 10% SVF + 5% SCFM2-KPI"
+    data = pd.concat([
+        _publication_table().assign(Groupe=medium),
+        _publication_table().assign(Groupe=medium.replace("62mM", "31mM")),
+    ], ignore_index=True)
+
+    publication = plot_publication_panels(data, value="DO_corr")
+    mixed = plot_mixed_panels(data)
+
+    assert all("\n" in axis.get_title() for axis in publication.axes)
+    assert all("\n" in axis.get_title() for axis in mixed.axes if axis.get_title())
+    assert "DMEM-KPI" in publication.axes[0].get_title()
+    publication.canvas.draw()
+    mixed.canvas.draw()
+    plt.close(publication)
+    plt.close(mixed)
+
+
+def test_long_medium_names_wrap_in_metric_condition_labels():
+    medium = "DMEM-KPI (62mM) + 10% SVF + 5% SCFM2-KPI"
+    metrics = pd.DataFrame([
+        {"souche": strain, "Groupe": medium, "experience_id": "exp1",
+         "replicat": 1, "lum_norm_auc": value}
+        for strain, value in (("P0-lux", 10.0), ("Reporter-lux", 20.0))
+    ])
+
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", compare_media=True, title="AUC"
+    )
+
+    labels = [label.get_text() for label in figure.axes[0].get_xticklabels()]
+    assert all(label.count("\n") >= 2 for label in labels)
+    assert all("SCFM2-KPI" in label for label in labels)
+    figure.canvas.draw()
+    plt.close(figure)
+
+
 def test_nearby_technical_times_are_aligned_before_biological_summary():
     data = _publication_table()
     data.loc[data["puits"].eq("A2"), "temps_h"] += 5 / 3600
