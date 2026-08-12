@@ -152,6 +152,10 @@ identity, so technical wells cannot artificially narrow pooled SD error bars.
 That recovered identity is retained when the dual-axis growth/luminescence view
 pools groups by medium; its SD bars therefore use the same biological units as
 the corrected-luminescence mean-of-experiments recap.
+The historical `replicat` and `sample_header` fields are technical identities:
+they are averaged within an experiment and never counted as biological N. When
+no independent-experiment or biological-replicate identity is available, the
+curve remains descriptive and its biological SD is intentionally unavailable.
 
 ## Export formats
 

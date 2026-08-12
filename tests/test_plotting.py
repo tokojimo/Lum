@@ -506,6 +506,45 @@ def test_pooled_summary_uses_group_experiments_not_technical_wells_for_sd():
     assert summary.loc[0, "std"] == pytest.approx(np.std([2.3e6, 1.5e6, 4.4e6], ddof=1))
 
 
+def test_technical_replicate_numbers_never_inflate_biological_sd():
+    data = pd.DataFrame([
+        {"Groupe": f"Experiment {experiment} | LB", "replicat": technical,
+         "sample_header": f"well-{technical}", "temps_h": 1.0,
+         "Lum_corr": biological_value + technical_offset}
+        for experiment, biological_value in ((1, 100.0), (2, 200.0), (3, 400.0))
+        for technical, technical_offset in ((1, -10.0), (2, 10.0))
+    ])
+
+    summary = _aligned_biological_summary(data, "Lum_corr")
+
+    assert summary.loc[0, "n_biological"] == 3
+    assert summary.loc[0, "mean"] == pytest.approx(np.mean([100, 200, 400]))
+    assert summary.loc[0, "std"] == pytest.approx(np.std([100, 200, 400], ddof=1))
+
+
+def test_unidentified_technical_series_do_not_manufacture_biological_sd():
+    data = pd.DataFrame({
+        "Groupe": ["LB", "LB"], "replicat": [1, 2],
+        "sample_header": ["well-1", "well-2"], "temps_h": [1.0, 1.0],
+        "Lum_corr": [90.0, 110.0],
+    })
+
+    summary = _aligned_biological_summary(data, "Lum_corr")
+
+    assert summary.loc[0, "n_biological"] == 1
+    assert summary.loc[0, "mean"] == pytest.approx(100.0)
+    assert pd.isna(summary.loc[0, "std"])
+
+
+def test_one_repeated_legacy_experiment_does_not_create_a_pooled_recap():
+    data = _publication_table().assign(Groupe="Experiment 1 | DMEM")
+
+    figures = build_publication_figures(data, families=("corrected",))
+
+    assert [name for name, _ in figures] == ["luminescence_corrigee"]
+    plt.close(figures[0][1])
+
+
 def test_legacy_experiment_sd_survives_corrected_recap_and_mixed_pooling():
     biological_values = (2.3e6, 1.5e6, 4.4e6)
     data = pd.DataFrame([

@@ -126,9 +126,10 @@ def directional_comparison_options(data: pd.DataFrame) -> dict[str, tuple[str, s
 def _has_multiple_experiments(data: pd.DataFrame) -> bool:
     if "experience_id" in data and data["experience_id"].dropna().astype(str).nunique() > 1:
         return True
-    return data["Groupe"].astype(str).str.match(
-        r"exp(?:eriment)?\s*\d+\s*\|", case=False
-    ).sum() > 1
+    experiments = data["Groupe"].astype(str).str.extract(
+        r"^\s*(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE, expand=False,
+    )
+    return experiments.dropna().str.casefold().nunique() > 1
 
 
 def _pooled_media(data: pd.DataFrame) -> pd.DataFrame:
@@ -235,21 +236,30 @@ def _aligned_biological_summary(data: pd.DataFrame, value: str,
     # example ``Experiment 2 | LB``).  Recover that identity before pooling;
     # otherwise the sample-header fallback would incorrectly treat technical
     # wells as independent biological observations and shrink the recap SD.
-    experiment_key = "experience_id"
-    if experiment_key not in work or not work[experiment_key].notna().any():
-        experiment_key = "_experiment_from_group"
-        if experiment_key not in work or not work[experiment_key].notna().any():
-            group_experiment = work["Groupe"].astype(str).str.extract(
-                r"^\s*(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE,
-                expand=False,
-            ) if "Groupe" in work else pd.Series(index=work.index, dtype=object)
-            if group_experiment.notna().any():
-                work[experiment_key] = group_experiment.str.casefold()
-    biological_ids = [column for column in (experiment_key, "replicat")
-                      if column in work and work[column].notna().any()]
-    # A sample header is the safest fallback when biological metadata are absent.
-    biological_ids = biological_ids or ["sample_header"]
-    biological = (work.groupby([*biological_ids, "temps_aligne_h"], dropna=False)[value]
+    # Build one explicit independent-unit key.  ``replicat`` and
+    # ``sample_header`` identify technical series in historical imports and must
+    # never increase biological N.  When no independent identity is available,
+    # collapse the technical readings into one (SD unavailable) observation
+    # rather than manufacture an SD from pseudoreplicates.
+    group_experiment = work.get("_experiment_from_group")
+    if group_experiment is None or not group_experiment.notna().any():
+        group_experiment = (work["Groupe"].astype(str).str.extract(
+            r"^\s*(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE,
+            expand=False,
+        ).str.casefold() if "Groupe" in work else
+            pd.Series(pd.NA, index=work.index, dtype="string"))
+    experiment = (work["experience_id"].astype("string")
+                  if "experience_id" in work else
+                  pd.Series(pd.NA, index=work.index, dtype="string"))
+    experiment = experiment.fillna(group_experiment.astype("string"))
+    if "biological_replicate_id" in work and work["biological_replicate_id"].notna().any():
+        biological_replicate = work["biological_replicate_id"].astype("string")
+        work["_biological_unit"] = (
+            experiment.fillna("unidentified-experiment") + "\0" + biological_replicate
+        )
+    else:
+        work["_biological_unit"] = experiment.fillna("unidentified-biological-unit")
+    biological = (work.groupby(["_biological_unit", "temps_aligne_h"], dropna=False)[value]
                    .mean().reset_index())
 
     # Independent runs commonly start a few minutes apart.  A strict join on
@@ -258,10 +268,10 @@ def _aligned_biological_summary(data: pd.DataFrame, value: str,
     # (displayed as zero).  For a pooled recap, match the observed acquisition
     # sequence instead.  This does not interpolate values: point k from every
     # experiment is merely shown at the median observed time of point k.
-    if experiment_key in biological and biological[experiment_key].nunique(dropna=True) > 1:
-        biological = biological.sort_values([experiment_key, "temps_aligne_h"])
+    if biological["_biological_unit"].nunique(dropna=True) > 1:
+        biological = biological.sort_values(["_biological_unit", "temps_aligne_h"])
         biological["_acquisition"] = biological.groupby(
-            experiment_key, dropna=False
+            "_biological_unit", dropna=False
         )["temps_aligne_h"].rank(method="dense").astype(int)
         display_times = biological.groupby("_acquisition")["temps_aligne_h"].median()
         biological["temps_aligne_h"] = biological["_acquisition"].map(display_times)
