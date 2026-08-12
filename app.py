@@ -53,6 +53,64 @@ def cached_complete_analysis(
     )
 
 
+@st.cache_data(show_spinner="Contrôle qualité en cours…", max_entries=8)
+def cached_quality_control(data: pd.DataFrame, threshold: float):
+    """Avoid recomputing QC when an unrelated widget triggers a rerun."""
+    return run_quality_control(data, threshold)
+
+
+@st.cache_data(show_spinner="Correction des blancs en cours…", max_entries=8)
+def cached_blank_correction(data: pd.DataFrame, decisions: pd.DataFrame):
+    """Reuse blank correction until the source data or decisions change."""
+    return run_blank_correction(data, decisions)
+
+
+@st.cache_data(show_spinner="Normalisation en cours…", max_entries=8)
+def cached_normalization(
+    data: pd.DataFrame, blank_sd_multiplier: float, minimum_od: float, consecutive_points: int,
+):
+    """Reuse normalization for identical data and scientific settings."""
+    return run_normalization(data, blank_sd_multiplier, minimum_od, consecutive_points)
+
+
+@st.cache_data(show_spinner="Calcul des paramètres cinétiques…", max_entries=8)
+def cached_kinetics(
+    data: pd.DataFrame,
+    growth_window_points: int,
+    minimum_auc_points: int,
+    growth_window_min_duration_h: float,
+    growth_rate_min_r_squared: float,
+):
+    """Reuse kinetic metrics when only display controls have changed."""
+    return run_kinetics(
+        data,
+        growth_window_points=growth_window_points,
+        minimum_auc_points=minimum_auc_points,
+        growth_window_min_duration_h=growth_window_min_duration_h,
+        growth_rate_min_r_squared=growth_rate_min_r_squared,
+    )
+
+
+@st.cache_data(show_spinner="Préparation des courbes…", max_entries=12)
+def cached_guided_raw_figures(data: pd.DataFrame, sample_type: str):
+    """Build costly raw previews only once for each selection."""
+    return build_guided_raw_figures(data, sample_type=sample_type)
+
+
+@st.cache_data(show_spinner="Préparation des figures…", max_entries=12)
+def cached_publication_figures(
+    data: pd.DataFrame,
+    title: str,
+    families: tuple[str, ...],
+    panel_by: str,
+    lum_scale: str,
+):
+    """Reuse publication figures across Streamlit's full-script reruns."""
+    return build_publication_figures(
+        data, title=title, families=families, panel_by=panel_by, lum_scale=lum_scale,
+    )
+
+
 st.title("LuxPlate Analyzer")
 st.caption("Du classeur Varioskan brut aux données contrôlées, analysées et visualisées.")
 
@@ -120,11 +178,11 @@ with guided_tab:
                 info_tabs = st.tabs(["Courbes des blancs", "Courbes des échantillons"])
                 with info_tabs[0]:
                     st.caption("Une figure statique par réplicat biologique, avec la DO et la luminescence.")
-                    for _, figure in build_guided_raw_figures(guided_selected, sample_type="blanc"):
+                    for _, figure in cached_guided_raw_figures(guided_selected, sample_type="blanc"):
                         st.pyplot(figure, use_container_width=True)
                 with info_tabs[1]:
                     st.caption("Une figure statique par souche, milieu et réplicat biologique.")
-                    for _, figure in build_guided_raw_figures(guided_selected, sample_type="souche"):
+                    for _, figure in cached_guided_raw_figures(guided_selected, sample_type="souche"):
                         st.pyplot(figure, use_container_width=True)
 
                 st.subheader("Points et courbes à supprimer")
@@ -254,7 +312,7 @@ with guided_tab:
                         if not guided_figure_labels:
                             st.info("Sélectionnez au moins une figure finale.")
                         else:
-                            guided_figures = build_publication_figures(
+                            guided_figures = cached_publication_figures(
                                 complete.normalization.normalized_data,
                                 title="Analyse complète",
                                 families=tuple(guided_family_labels[label] for label in guided_figure_labels),
@@ -353,7 +411,7 @@ with qc_tab:
     else:
         threshold = st.number_input("Seuil du z-score robuste", min_value=0.1, value=3.5, step=0.1)
         try:
-            qc = run_quality_control(st.session_state["long_data"], threshold)
+            qc = cached_quality_control(st.session_state["long_data"], float(threshold))
         except ValueError as error:
             st.error(f"Contrôle qualité impossible : {error}")
             st.stop()
@@ -436,7 +494,7 @@ with blanks_tab:
         st.info("Validez d'abord les décisions QC dans l'onglet 2 pour déverrouiller cette étape.")
     else:
         try:
-            correction = run_blank_correction(
+            correction = cached_blank_correction(
                 st.session_state["long_data"], st.session_state["validated_qc_journal"]
             )
         except ValueError as error:
@@ -497,7 +555,9 @@ with normalization_tab:
         minimum_od = parameter_columns[1].number_input("DO minimale", min_value=0.0, value=0.05, step=0.01, format="%.3f")
         consecutive = parameter_columns[2].number_input("Points consécutifs", min_value=1, value=3, step=1)
         try:
-            normalization = run_normalization(correction.corrected_data, k_sd, minimum_od, int(consecutive))
+            normalization = cached_normalization(
+                correction.corrected_data, float(k_sd), float(minimum_od), int(consecutive)
+            )
         except ValueError as error:
             st.error(f"Normalisation impossible : {error}")
         else:
@@ -547,10 +607,9 @@ with kinetics_tab:
                                                value=0.0, step=0.05)
         auc_points = parameters[3].number_input("Points minimum pour l'AUC", min_value=2, value=2, step=1)
         try:
-            kinetics = run_kinetics(
+            kinetics = cached_kinetics(
                 st.session_state["normalization_result"].normalized_data,
-                growth_window_points=int(window), minimum_auc_points=int(auc_points),
-                growth_window_min_duration_h=float(duration), growth_rate_min_r_squared=float(r_squared),
+                int(window), int(auc_points), float(duration), float(r_squared),
             )
         except ValueError as error:
             st.error(f"Extraction cinétique impossible : {error}")
