@@ -332,13 +332,15 @@ def test_metric_points_make_one_panel_per_medium_and_label_pvalues_with_stars():
     ])
 
     figure = plot_metric_points(
-        metrics, metric="lum_norm_auc", group_by="Groupe", title="Normalized AUC"
+        metrics, metric="lum_norm_auc", group_by="Groupe", title="Normalized AUC",
+        directional_comparisons=(("Reporter-lux", "P0-lux"),),
     )
 
     assert len(figure.axes) == 2
     assert [axis.get_title() for axis in figure.axes] == ["DMEM", "SCFM2"]
     labels = [text.get_text() for axis in figure.axes for text in axis.texts]
-    assert any(label.startswith("pHolm = ") and "(raw " in label for label in labels)
+    assert any(label.startswith("paired one-tailed t (log10): pHolm")
+               and "(raw " in label for label in labels)
     plt.close(figure)
 
 
@@ -361,14 +363,12 @@ def test_metric_points_compare_every_strain_medium_pair_in_one_figure():
         "PspeD\nMilieu 1", "PspeD\nMilieu 2", "PspeE\nMilieu 1",
         "PspeE\nMilieu 2", "P0\nMilieu 1", "P0\nMilieu 2",
     ]
-    # Six conditions yield all 15 Holm-corrected pairwise comparisons.
-    assert len(figure._luxplate_statistics) == 15
-    assert len([text for text in figure.axes[0].texts if text.get_text().startswith("pHolm")]) == 15
-    assert figure.get_figheight() > 6
+    # No hypothesis is tested automatically.
+    assert figure._luxplate_statistics.empty
     plt.close(figure)
 
 
-def test_metric_points_can_select_comparison_scope_and_significance_display():
+def test_metric_points_only_draws_selected_directional_hypotheses():
     metrics = pd.DataFrame([
         {"souche": strain, "Groupe": medium, "experience_id": f"exp{experiment}",
          "replicat": 1, "lum_norm_auc": experiment + strain_index * 10 + medium_index * 3}
@@ -377,22 +377,18 @@ def test_metric_points_can_select_comparison_scope_and_significance_display():
         for medium_index, medium in enumerate(("M1", "M2"))
     ])
 
-    same_strain = plot_metric_points(
+    conditions = (("A\0M2", "A\0M1"),)
+    selected = plot_metric_points(
         metrics, metric="lum_norm_auc", compare_media=True,
-        comparison_scope="same_strain_across_media",
+        directional_comparisons=conditions,
     )
-    within_medium = plot_metric_points(
-        metrics, metric="lum_norm_auc", compare_media=True,
-        comparison_scope="strains_within_medium", significant_only=True,
-    )
-
-    assert len(same_strain._luxplate_statistics) == 3
-    assert len(within_medium._luxplate_statistics) == 6
-    labels = [text.get_text() for text in within_medium.axes[0].texts
-              if text.get_text().startswith("pHolm")]
-    assert len(labels) == sum(within_medium._luxplate_statistics["p_holm"] < .05)
-    plt.close(same_strain)
-    plt.close(within_medium)
+    assert len(selected._luxplate_statistics) == 1
+    comparison = selected._luxplate_statistics.iloc[0]
+    assert (comparison.condition_1, comparison.condition_2) == conditions[0]
+    labels = [text.get_text() for text in selected.axes[0].texts
+              if text.get_text().startswith("paired one-tailed t")]
+    assert len(labels) == 1
+    plt.close(selected)
 
 
 def test_gallery_can_select_curve_families():
