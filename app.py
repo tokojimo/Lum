@@ -12,7 +12,7 @@ from luxplate.normalization import run_normalization
 from luxplate.kinetics import run_kinetics
 from luxplate.export import package_figures
 from luxplate.plotting import (build_guided_raw_figures, build_publication_figures,
-                               directional_comparison_options, plot_blank_correction, plot_kinetics,
+                               directional_condition_options, plot_blank_correction, plot_kinetics,
                                plot_normalization, plot_qc_curves, plot_raw_curves)
 from luxplate.qc import run_quality_control
 from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
@@ -117,6 +117,39 @@ def cached_publication_figures(
         data, title=title, families=families, panel_by=panel_by, lum_scale=lum_scale,
         directional_comparisons=directional_comparisons,
     )
+
+
+def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tuple[str, str], ...]:
+    """Render a reference-first hypothesis picker without a quadratic pair list."""
+    conditions = directional_condition_options(data)
+    if len(conditions) < 2:
+        st.info("Au moins deux boîtes sont nécessaires pour définir une comparaison.")
+        return ()
+
+    columns = st.columns(2)
+    reference_label = columns[0].selectbox(
+        "Boîte de référence (A)", list(conditions), key=f"{key}_reference",
+        help="La condition dont vous testez si la moyenne est supérieure.",
+    )
+    comparator_labels = [label for label in conditions if label != reference_label]
+    comparator_key = f"{key}_comparators"
+    if comparator_key in st.session_state:
+        st.session_state[comparator_key] = [
+            label for label in st.session_state[comparator_key] if label in comparator_labels
+        ]
+    selected = columns[1].multiselect(
+        "Boîte(s) à comparer (B)", comparator_labels, key=comparator_key,
+        placeholder="Choisir une ou plusieurs boîtes",
+        help="Un test A > B sera créé pour chaque boîte sélectionnée.",
+    )
+    if selected:
+        st.caption(
+            f"{len(selected)} hypothèse{'s' if len(selected) > 1 else ''} : "
+            + " ; ".join(f"{reference_label} > {label}" for label in selected)
+        )
+    else:
+        st.caption("Aucune boîte B sélectionnée : aucun test ne sera effectué.")
+    return tuple((conditions[reference_label], conditions[label]) for label in selected)
 
 
 st.title("LuxPlate Analyzer")
@@ -338,17 +371,14 @@ with guided_tab:
                         guided_lum_label = guided_options[1].selectbox(
                             "Luminescence", ["Linéaire", "Logarithmique"], key="guided_figure_lum_scale",
                         )
-                        guided_comparison_options = directional_comparison_options(
-                            complete.normalization.normalized_data
-                        )
                         with st.expander("Hypothèses statistiques directionnelles", expanded=False):
                             st.caption(
                                 "Sélectionnez uniquement les hypothèses définies avant de consulter les résultats. "
                                 "Chaque choix teste la condition à gauche comme supérieure à celle de droite."
                             )
-                            guided_selected_comparisons = st.multiselect(
-                                "Comparaisons (condition A > condition B)",
-                                list(guided_comparison_options), key="guided_directional_comparisons",
+                            guided_selected_comparisons = select_directional_comparisons(
+                                complete.normalization.normalized_data,
+                                key="guided_directional_comparisons",
                             )
                         guided_figures = []
                         if not guided_figure_labels:
@@ -360,10 +390,7 @@ with guided_tab:
                                 families=tuple(guided_family_labels[label] for label in guided_figure_labels),
                                 panel_by="Groupe" if guided_panel_label.endswith("milieu") else "souche",
                                 lum_scale="log" if guided_lum_label == "Logarithmique" else "linear",
-                                directional_comparisons=tuple(
-                                    guided_comparison_options[label]
-                                    for label in guided_selected_comparisons
-                                ),
+                                directional_comparisons=guided_selected_comparisons,
                             )
                             for guided_name, guided_figure in guided_figures:
                                 st.subheader(guided_name.replace("_", " ").title())
@@ -757,16 +784,14 @@ with figures_tab:
         uncertainty_label = st.radio(
             "Incertitude de la figure mixte", ["Barres ± SD", "Ruban ± SD"], horizontal=True
         )
-        comparison_options = directional_comparison_options(
-            st.session_state["normalization_result"].normalized_data
-        )
         with st.expander("Hypothèses statistiques directionnelles", expanded=False):
             st.caption(
                 "Définissez vos hypothèses avant de regarder les résultats. Aucune sélection = aucun test. "
                 "L'ordre est directionnel : A > B ne signifie pas B > A."
             )
-            selected_comparison_labels = st.multiselect(
-                "Comparaisons (condition A > condition B)", list(comparison_options),
+            selected_comparisons = select_directional_comparisons(
+                st.session_state["normalization_result"].normalized_data,
+                key="publication_directional_comparisons",
             )
         significant_only = st.checkbox(
             "Afficher uniquement les comparaisons significatives (pHolm < 0,05)", value=False,
@@ -801,9 +826,7 @@ with figures_tab:
                         metric_scale="log" if metric_label == "Logarithmique" else "linear",
                         uncertainty="bars" if uncertainty_label.startswith("Barres") else "ribbon",
                         control=control_strain,
-                        directional_comparisons=tuple(
-                            comparison_options[label] for label in selected_comparison_labels
-                        ),
+                        directional_comparisons=selected_comparisons,
                         significant_only=significant_only,
                     )
                     gallery_progress.progress(65, text="Encodage des formats d'export…")

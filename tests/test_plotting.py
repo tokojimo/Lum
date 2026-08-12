@@ -7,10 +7,28 @@ import pytest
 from matplotlib.ticker import FuncFormatter
 
 from luxplate.plotting import (_aligned_biological_summary, build_guided_raw_figures,
-                               build_publication_figures, metric_fold_change_vs_control,
+                               build_publication_figures, directional_condition_options,
+                               directional_comparison_options, metric_fold_change_vs_control,
                                plot_kinetics, plot_metric_points, plot_mixed_panels,
                                plot_publication_panels)
 from test_workflow import workflow_table
+
+
+def test_directional_condition_options_exposes_each_box_once():
+    data = pd.DataFrame({
+        "souche": ["P0-lux", "P0-lux", "PspeD-lux", "PspeD-lux"],
+        "Groupe": ["Experiment 1 | SCFM2", "Experiment 2 | SCFM2",
+                   "Experiment 1 | SCFM2", "Experiment 2 | SCFM2"],
+    })
+
+    assert directional_condition_options(data) == {
+        "P0 · SCFM2": "P0-lux\0SCFM2",
+        "PspeD · SCFM2": "PspeD-lux\0SCFM2",
+    }
+    assert directional_comparison_options(data) == {
+        "P0 · SCFM2 > PspeD · SCFM2": ("P0-lux\0SCFM2", "PspeD-lux\0SCFM2"),
+        "PspeD · SCFM2 > P0 · SCFM2": ("PspeD-lux\0SCFM2", "P0-lux\0SCFM2"),
+    }
 
 
 def test_guided_raw_figures_group_technical_replicates_in_one_biological_row():

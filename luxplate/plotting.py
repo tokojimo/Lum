@@ -94,19 +94,31 @@ def _medium_label(value: object) -> str:
     return match.group(1).strip() if match else label
 
 
-def directional_comparison_options(data: pd.DataFrame) -> dict[str, tuple[str, str]]:
-    """Return UI labels and ordered internal condition pairs for metric plots."""
+def directional_condition_options(data: pd.DataFrame) -> dict[str, str]:
+    """Return the compact UI label and internal id of each boxplot condition.
+
+    Keeping individual conditions separate lets the interface ask for one
+    reference and then its comparators instead of displaying the quadratic
+    list of every possible ordered pair.
+    """
     if not {"souche", "Groupe"}.issubset(data.columns):
         return {}
     conditions = list(dict.fromkeys(
         zip(data["souche"].astype(str), data["Groupe"].map(_medium_label))
     ))
-    internal = [(strain + "\0" + medium, f"{_display_strain(strain)} · {medium}")
-                for strain, medium in conditions]
+    return {
+        f"{_display_strain(strain)} · {medium}": strain + "\0" + medium
+        for strain, medium in conditions
+    }
+
+
+def directional_comparison_options(data: pd.DataFrame) -> dict[str, tuple[str, str]]:
+    """Return UI labels and ordered internal condition pairs for metric plots."""
+    conditions = directional_condition_options(data)
     return {
         f"{left_label} > {right_label}": (left, right)
-        for left, left_label in internal
-        for right, right_label in internal
+        for left_label, left in conditions.items()
+        for right_label, right in conditions.items()
         if left != right
     }
 
