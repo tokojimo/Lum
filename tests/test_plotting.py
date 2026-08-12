@@ -281,8 +281,7 @@ def test_metric_points_make_one_panel_per_medium_and_label_pvalues_with_stars():
     assert len(figure.axes) == 2
     assert [axis.get_title() for axis in figure.axes] == ["DMEM", "SCFM2"]
     labels = [text.get_text() for axis in figure.axes for text in axis.texts]
-    assert any(label.startswith("Pvalue = ") and label.endswith(("*", "ns")) for label in labels)
-    assert not any("pHolm" in label for label in labels)
+    assert any(label.startswith("pHolm = ") and "(raw " in label for label in labels)
     plt.close(figure)
 
 
@@ -307,7 +306,7 @@ def test_metric_points_compare_every_strain_medium_pair_in_one_figure():
     ]
     # Six conditions yield all 15 Holm-corrected pairwise comparisons.
     assert len(figure._luxplate_statistics) == 15
-    assert len([text for text in figure.axes[0].texts if text.get_text().startswith("Pvalue")]) == 15
+    assert len([text for text in figure.axes[0].texts if text.get_text().startswith("pHolm")]) == 15
     assert figure.get_figheight() > 6
     plt.close(figure)
 
