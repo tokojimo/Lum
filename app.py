@@ -109,11 +109,40 @@ def cached_publication_figures(
     families: tuple[str, ...],
     panel_by: str,
     lum_scale: str,
+    comparisons: tuple[tuple[str, str], ...],
 ):
     """Reuse publication figures across Streamlit's full-script reruns."""
     return build_publication_figures(
         data, title=title, families=families, panel_by=panel_by, lum_scale=lum_scale,
+        comparisons=comparisons,
     )
+
+
+def directional_comparison_picker(data: pd.DataFrame, *, key: str) -> tuple[tuple[str, str], ...]:
+    """Let the user prespecify a family of directional reporter/medium contrasts."""
+    conditions = list(dict.fromkeys(
+        (data["souche"].astype(str) + "\0" + data["Groupe"].astype(str).str.replace(
+            r"^exp(?:eriment)?\s*\d+\s*\|\s*", "", regex=True, case=False,
+        )).tolist()
+    ))
+    labels = {
+        f"{higher.replace(chr(0), ' · ')}  >  {lower.replace(chr(0), ' · ')}": (higher, lower)
+        for higher in conditions for lower in conditions if higher != lower
+    }
+    with st.expander("Hypothèses statistiques directionnelles", expanded=True):
+        st.markdown(
+            "Sélectionnez uniquement les comparaisons prévues par vos hypothèses **avant** de regarder "
+            "les p-values. `A > B` teste une AUC/mesure plus grande pour A. Les trois puits techniques "
+            "sont moyennés par réplicat biologique; le test t apparié unilatéral porte sur les `log10` "
+            "des moyennes biologiques, puis Holm corrige la famille sélectionnée."
+        )
+        selected = st.multiselect(
+            "Qui doit être supérieur à qui ?", list(labels), key=key,
+            placeholder="Ex. PspeD2-1A · LB  >  P0 · LB",
+        )
+        if not selected:
+            st.info("Aucun test ne sera affiché tant qu'aucune hypothèse n'est sélectionnée.")
+    return tuple(labels[label] for label in selected)
 
 
 st.title("LuxPlate Analyzer")
@@ -335,6 +364,9 @@ with guided_tab:
                         guided_lum_label = guided_options[1].selectbox(
                             "Luminescence", ["Linéaire", "Logarithmique"], key="guided_figure_lum_scale",
                         )
+                        guided_comparisons = directional_comparison_picker(
+                            complete.normalization.normalized_data, key="guided_directional_comparisons",
+                        )
                         guided_figures = []
                         if not guided_figure_labels:
                             st.info("Sélectionnez au moins une figure finale.")
@@ -345,6 +377,7 @@ with guided_tab:
                                 families=tuple(guided_family_labels[label] for label in guided_figure_labels),
                                 panel_by="Groupe" if guided_panel_label.endswith("milieu") else "souche",
                                 lum_scale="log" if guided_lum_label == "Logarithmique" else "linear",
+                                comparisons=guided_comparisons,
                             )
                             for guided_name, guided_figure in guided_figures:
                                 st.subheader(guided_name.replace("_", " ").title())
@@ -356,8 +389,8 @@ with guided_tab:
                                 "luminescence is blank-corrected RLU divided by blank-corrected OD600. "
                                 "Summary boxplots show independent biological experiments and their exact mean; "
                                 "small points are technical replicates and large points are biological means. "
-                                "Statistics use biological means only. The bottom p-value is the overall Friedman "
-                                "test; every bracket reports its own paired Wilcoxon p-value after Holm correction."
+                                "Statistics use biological means only. Selected brackets report one-tailed paired "
+                                "t-tests on log10 values, with Holm correction across the selected hypotheses."
                             )
                     with result_tabs[4]:
                         st.subheader("Exporter les résultats complets")
@@ -738,16 +771,10 @@ with figures_tab:
         uncertainty_label = st.radio(
             "Incertitude de la figure mixte", ["Barres ± SD", "Ruban ± SD"], horizontal=True
         )
-        with st.expander("Pourquoi Friedman plutôt qu'une ANOVA ou un test t ?"):
-            st.markdown(
-                "Les mêmes expériences biologiques mesurent plusieurs promoteurs : les observations sont donc "
-                "**appariées**. Friedman compare au moins trois promoteurs sans supposer une distribution normale, "
-                "ce qui est prudent avec peu de réplicats. Une ANOVA à mesures répétées demanderait notamment des "
-                "résidus approximativement normaux; un test t ne compare que deux promoteurs et suppose la normalité "
-                "des différences. Après Friedman, les paires sont comparées par Wilcoxon apparié et la correction de "
-                "Holm limite les faux positifs dus aux comparaisons multiples. Avec seulement deux promoteurs, "
-                "Friedman n'est pas calculé : seul Wilcoxon est pertinent."
-            )
+        directional_comparisons = directional_comparison_picker(
+            st.session_state["normalization_result"].normalized_data,
+            key="publication_directional_comparisons",
+        )
         export_dpi = st.select_slider(
             "Qualité des exports PNG et TIFF (dpi)", options=[150, 300, 600], value=600,
             help="SVG et PDF restent vectoriels, quelle que soit cette valeur.",
@@ -772,6 +799,7 @@ with figures_tab:
                         metric_scale="log" if metric_label == "Logarithmique" else "linear",
                         uncertainty="bars" if uncertainty_label.startswith("Barres") else "ribbon",
                         control=control_strain,
+                        comparisons=directional_comparisons,
                     )
                     gallery_progress.progress(65, text="Encodage des formats d'export…")
                     rendered, archive = package_figures(figures, dpi=export_dpi)
@@ -798,8 +826,8 @@ with figures_tab:
                     "moyennés par réplicat biologique, puis les courbes montrent moyenne biologique ± SD. "
                     "Normalized luminescence = blank-corrected RLU / blank-corrected OD600. Summary plots are "
                     "boxplots with their exact mean; small points are technical replicates and large points are "
-                    "biological means. Statistical "
-                    "tests use biological means only (Friedman; paired Wilcoxon post-hoc with Holm correction)."
+                    "biological means. Selected comparisons use biological means only: one-tailed paired t-tests "
+                    "on log10 values, with Holm correction across the selected hypothesis family."
                 )
                 png_column, tiff_column, svg_column, pdf_column = st.columns(4)
                 png_column.download_button(

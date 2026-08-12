@@ -14,7 +14,7 @@ from matplotlib.ticker import FuncFormatter
 from matplotlib.transforms import blended_transform_factory
 
 from luxplate.kinetics import run_kinetics
-from luxplate.statistics import paired_nonparametric_tests
+from luxplate.statistics import directional_paired_t_tests
 
 
 PUBLICATION_COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000")
@@ -394,7 +394,7 @@ def _significance_stars(p_value: float) -> str:
 
 def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, *,
                        metric: str, condition: str, y_scale: str, panel_title: str,
-                       seed: int) -> pd.DataFrame:
+                       seed: int, comparisons: tuple[tuple[str, str], ...]) -> pd.DataFrame:
     """Draw one metric panel and return its pairwise statistics."""
     conditions = list(dict.fromkeys(biological[condition].astype(str)))
     if condition == "_comparison":
@@ -482,8 +482,8 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     axis.title.set_fontweight("bold"); axis.title.set_ha("left"); axis.title.set_position((0, 1))
     _publication_style(axis)
 
-    omnibus, comparisons = paired_nonparametric_tests(
-        biological, value=metric, condition=condition,
+    comparisons = directional_paired_t_tests(
+        biological, value=metric, condition=condition, comparisons=comparisons,
         identity=tuple(identity_columns),
     )
     positions = {item: index for index, item in enumerate(conditions)}
@@ -500,21 +500,22 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
         # values makes it clear when a raw result loses significance after the
         # Holm correction instead of making every such result look erroneous.
         raw_label = "NA" if not np.isfinite(comparison.p_raw) else f"{comparison.p_raw:.3g}"
-        p_label = (f"pHolm {value_label} {_significance_stars(p)} "
+        p_label = (f"paired one-tailed t (log10), pHolm {value_label} {_significance_stars(p)} "
                    f"(raw {raw_label}; n={comparison.n_pairs})")
         axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
                   transform=transform, color="#333333", lw=.7, clip_on=False)
         axis.text((left + right) / 2, y + .006, p_label, transform=transform,
                   ha="center", va="bottom", fontsize=7)
-    axis.text(.99, .01, "Overall Friedman test: " +
-              (f"p = {omnibus:.3g}" if np.isfinite(omnibus) else "not estimable"),
-              transform=axis.transAxes, ha="right", va="bottom", fontsize=7, color="#555555")
+    if comparisons.empty:
+        axis.text(.99, .01, "No directional comparison selected", transform=axis.transAxes,
+                  ha="right", va="bottom", fontsize=7, color="#555555")
     return comparisons
 
 
 def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "linear",
                        title: str | None = None, group_by: str | None = None,
-                       compare_media: bool = False):
+                       compare_media: bool = False,
+                       comparisons: tuple[tuple[str, str], ...] = ()):
     """Plot metric distributions, optionally with one panel per medium or strain."""
     required = {"souche", "Groupe", metric}
     if group_by is not None:
@@ -555,7 +556,7 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         condition = "Groupe" if group_by == "souche" else "souche"
     ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
     condition_count = biological[condition].nunique()
-    comparison_count = condition_count * (condition_count - 1) // 2
+    comparison_count = len(comparisons)
     extra_height = min(8, .18 * comparison_count) if compare_media else 0
     width = max(6, 1.35 * condition_count) if compare_media else max(6, 4.3 * ncols)
     figure, axes = plt.subplots(nrows, ncols, figsize=(width, (4.5 + extra_height) * nrows), squeeze=False)
@@ -566,7 +567,7 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         panel_title = (title or metric) if panel is None else _display_panel(panel)
         statistics = _draw_metric_panel(axes.flat[index], panel_technical, panel_biological,
             metric=metric, condition=condition, y_scale=effective_scale,
-            panel_title=panel_title, seed=1947 + index)
+            panel_title=panel_title, seed=1947 + index, comparisons=comparisons)
         if panel is not None:
             statistics = statistics.assign(panel=panel)
         all_statistics.append(statistics)
@@ -648,7 +649,8 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     families: tuple[str, ...] = ("growth", "corrected", "mixed", "peak",
                                 "peak_time", "auc", "peak_fc", "auc_fc", "doubling"),
     panel_by: str = "Groupe", lum_scale: str = "linear", normalized_scale: str = "linear",
-    metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux") -> list[tuple[str, object]]:
+    metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux",
+    comparisons: tuple[tuple[str, str], ...] = ()) -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
     figures = []
     choices = (("growth", "DO_corr", "croissance", "linear", "Growth"),
@@ -694,11 +696,11 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                     fold_metric = f"{metric}_fold_change"
                     figures.append((suffix, plot_metric_points(
                         fold_changes, metric=fold_metric, y_scale=metric_scale,
-                        title=figure_label, compare_media=True)))
+                        title=figure_label, compare_media=True, comparisons=comparisons)))
                 else:
                     scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
                     figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
-                        title=figure_label, compare_media=True)))
+                        title=figure_label, compare_media=True, comparisons=comparisons)))
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
             uncertainty=uncertainty, title="Targeted control comparison"))

@@ -330,13 +330,14 @@ def test_metric_points_make_one_panel_per_medium_and_label_pvalues_with_stars():
     ])
 
     figure = plot_metric_points(
-        metrics, metric="lum_norm_auc", group_by="Groupe", title="Normalized AUC"
+        metrics, metric="lum_norm_auc", group_by="Groupe", title="Normalized AUC",
+        comparisons=(("Reporter-lux", "P0-lux"),),
     )
 
     assert len(figure.axes) == 2
     assert [axis.get_title() for axis in figure.axes] == ["DMEM", "SCFM2"]
     labels = [text.get_text() for axis in figure.axes for text in axis.texts]
-    assert any(label.startswith("pHolm = ") and "(raw " in label for label in labels)
+    assert any(label.startswith("paired one-tailed t (log10), pHolm") and "(raw " in label for label in labels)
     plt.close(figure)
 
 
@@ -351,7 +352,8 @@ def test_metric_points_compare_every_strain_medium_pair_in_one_figure():
     ])
 
     figure = plot_metric_points(
-        metrics, metric="lum_norm_auc", compare_media=True, title="AUC"
+        metrics, metric="lum_norm_auc", compare_media=True, title="AUC",
+        comparisons=(("PspeD-lux\0Milieu 1", "P0-lux\0Milieu 1"),),
     )
 
     assert len(figure.axes) == 1
@@ -359,10 +361,9 @@ def test_metric_points_compare_every_strain_medium_pair_in_one_figure():
         "PspeD\nMilieu 1", "PspeD\nMilieu 2", "PspeE\nMilieu 1",
         "PspeE\nMilieu 2", "P0\nMilieu 1", "P0\nMilieu 2",
     ]
-    # Six conditions yield all 15 Holm-corrected pairwise comparisons.
-    assert len(figure._luxplate_statistics) == 15
-    assert len([text for text in figure.axes[0].texts if text.get_text().startswith("pHolm")]) == 15
-    assert figure.get_figheight() > 6
+    assert len(figure._luxplate_statistics) == 1
+    assert len([text for text in figure.axes[0].texts
+                if text.get_text().startswith("paired one-tailed")]) == 1
     plt.close(figure)
 
 

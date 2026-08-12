@@ -10,10 +10,55 @@ from itertools import combinations
 
 import numpy as np
 import pandas as pd
-from scipy.stats import friedmanchisquare, wilcoxon
+from scipy.stats import friedmanchisquare, ttest_rel, wilcoxon
 
 
 RESULT_COLUMNS = ["condition_1", "condition_2", "n_pairs", "p_raw", "p_holm"]
+
+
+def directional_paired_t_tests(
+    biological: pd.DataFrame, *, value: str,
+    comparisons: tuple[tuple[str, str], ...], condition: str = "souche",
+    identity: tuple[str, ...] = ("experience_id", "replicat", "Groupe"),
+) -> pd.DataFrame:
+    """Test prespecified ``higher > lower`` contrasts on log10 biological means.
+
+    Technical observations must already have been collapsed into ``biological``.
+    Each contrast is paired on complete biological blocks. Holm correction is
+    applied only across the explicitly requested family of directional tests.
+    """
+    ids = [column for column in identity if column in biological and biological[column].notna().any()]
+    ids = ids or [column for column in ("Groupe",) if column in biological]
+    if not ids or condition not in biological or value not in biological:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
+    table = biological.pivot_table(index=ids, columns=condition, values=value, aggfunc="mean")
+    rows = []
+    for higher, lower in comparisons:
+        if higher not in table or lower not in table:
+            continue
+        pairs = table[[higher, lower]].dropna()
+        pairs = pairs.loc[pairs[higher].gt(0) & pairs[lower].gt(0)]
+        if len(pairs) < 2:
+            raw = np.nan
+        else:
+            raw = float(ttest_rel(
+                np.log10(pairs[higher]), np.log10(pairs[lower]), alternative="greater",
+            ).pvalue)
+        rows.append({"condition_1": higher, "condition_2": lower,
+                     "n_pairs": len(pairs), "p_raw": raw})
+    result = pd.DataFrame(rows, columns=RESULT_COLUMNS[:-1])
+    if result.empty:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
+    finite = result["p_raw"].dropna()
+    adjusted = pd.Series(np.nan, index=result.index, dtype=float)
+    order = finite.sort_values().index
+    running = 0.0
+    total = len(order)
+    for rank, index in enumerate(order):
+        running = max(running, min(1.0, result.at[index, "p_raw"] * (total - rank)))
+        adjusted.at[index] = running
+    result["p_holm"] = adjusted
+    return result
 
 
 def paired_nonparametric_tests(

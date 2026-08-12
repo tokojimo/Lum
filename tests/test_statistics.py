@@ -1,7 +1,45 @@
 import pandas as pd
 import pytest
 
-from luxplate.statistics import paired_nonparametric_tests
+from luxplate.statistics import directional_paired_t_tests, paired_nonparametric_tests
+
+
+def test_directional_paired_t_tests_use_log_biological_pairs_and_holm():
+    biological = pd.DataFrame([
+        {"experience_id": experiment, "condition": condition, "value": value}
+        for experiment, (control, mutant_ratio, other_ratio) in enumerate(
+            ((10.0, 3.8, 1.8), (20.0, 4.0, 2.0), (40.0, 4.2, 2.2)), start=1,
+        )
+        for condition, value in (("control", control), ("mutant", control * mutant_ratio),
+                                 ("other", control * other_ratio))
+    ])
+
+    result = directional_paired_t_tests(
+        biological, value="value", condition="condition",
+        comparisons=(("mutant", "control"), ("other", "control")),
+    )
+
+    assert result["n_pairs"].eq(3).all()
+    assert result["p_raw"].lt(.05).all()
+    assert result["p_holm"].ge(result["p_raw"]).all()
+
+
+def test_directional_paired_t_tests_ignore_nonpositive_and_incomplete_pairs():
+    biological = pd.DataFrame([
+        {"experience_id": "E1", "condition": "higher", "value": 4.0},
+        {"experience_id": "E1", "condition": "lower", "value": 2.0},
+        {"experience_id": "E2", "condition": "higher", "value": 5.0},
+        {"experience_id": "E2", "condition": "lower", "value": 0.0},
+        {"experience_id": "E3", "condition": "higher", "value": 6.0},
+    ])
+
+    result = directional_paired_t_tests(
+        biological, value="value", condition="condition",
+        comparisons=(("higher", "lower"),),
+    )
+
+    assert result.loc[0, "n_pairs"] == 1
+    assert pd.isna(result.loc[0, "p_raw"])
 
 
 def test_paired_tests_use_complete_biological_blocks_and_holm_correction():
