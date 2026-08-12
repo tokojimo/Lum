@@ -51,11 +51,14 @@ def _publication_style(axis):
     axis.tick_params(width=0.8, length=3)
 
 
+def _scientific_tick_label(value, _position):
+    """Format an RLU tick without capturing unpicklable local state."""
+    return "0" if value == 0 else f"{value:.0e}"
+
+
 def _scientific_rlu_axis(axis):
     """Put the exponent on every RLU tick instead of above the plotting area."""
-    axis.yaxis.set_major_formatter(FuncFormatter(
-        lambda value, _position: "0" if value == 0 else f"{value:.0e}"
-    ))
+    axis.yaxis.set_major_formatter(FuncFormatter(_scientific_tick_label))
     axis.yaxis.offsetText.set_visible(False)
 
 
