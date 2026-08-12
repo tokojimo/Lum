@@ -332,6 +332,7 @@ with guided_tab:
                         guided_lum_label = guided_options[1].selectbox(
                             "Luminescence", ["Linéaire", "Logarithmique"], key="guided_figure_lum_scale",
                         )
+                        guided_figures = []
                         if not guided_figure_labels:
                             st.info("Sélectionnez au moins une figure finale.")
                         else:
@@ -357,7 +358,10 @@ with guided_tab:
                             )
                     with result_tabs[4]:
                         st.subheader("Exporter les résultats complets")
-                        st.caption("Téléchargez directement les tableaux produits par l'analyse guidée.")
+                        st.caption(
+                            "Téléchargez directement les tableaux et les figures produits par "
+                            "l'analyse guidée."
+                        )
                         base = (guided_uploads[0].name.rsplit(".", 1)[0]
                                 if len(guided_uploads) == 1 else "analyse_multi_fichiers")
                         exports = st.columns(3)
@@ -368,6 +372,40 @@ with guided_tab:
                             index=False).encode("utf-8-sig"), f"{base}_metriques_cinetiques.csv", "text/csv")
                         exports[2].download_button("Décisions d'exclusion (.csv)", st.session_state["guided_decisions"].to_csv(
                             index=False).encode("utf-8-sig"), f"{base}_decisions_exclusion.csv", "text/csv")
+                        st.divider()
+                        st.subheader("Figures finales")
+                        if not guided_figures:
+                            st.info("Sélectionnez au moins une figure dans l'onglet « Courbes finales ».")
+                        else:
+                            guided_export_dpi = st.select_slider(
+                                "Qualité des fichiers PNG et TIF (dpi)",
+                                options=[150, 300, 600], value=300, key="guided_export_dpi",
+                                help="Le SVG reste vectoriel, quelle que soit cette valeur.",
+                            )
+                            with st.spinner("Préparation des figures à télécharger…"):
+                                guided_rendered, guided_archive = package_figures(
+                                    guided_figures, dpi=guided_export_dpi,
+                                )
+                            st.download_button(
+                                "Toutes les figures (ZIP)", guided_archive,
+                                file_name=f"{base}_figures.zip", mime="application/zip", type="primary",
+                                key="guided_figures_zip",
+                            )
+                            for item in guided_rendered:
+                                st.markdown(f"**{item.name.replace('_', ' ').title()}**")
+                                png_export, tif_export, svg_export = st.columns(3)
+                                png_export.download_button(
+                                    f"PNG · {guided_export_dpi} dpi", item.png, f"{item.name}.png",
+                                    "image/png", key=f"guided_png_{item.name}",
+                                )
+                                tif_export.download_button(
+                                    f"TIF · {guided_export_dpi} dpi", item.tiff, f"{item.name}.tif",
+                                    "image/tiff", key=f"guided_tif_{item.name}",
+                                )
+                                svg_export.download_button(
+                                    "SVG · vectoriel", item.svg, f"{item.name}.svg",
+                                    "image/svg+xml", key=f"guided_svg_{item.name}",
+                                )
 
 with import_tab:
     st.header("1 · Import et mise en forme")
