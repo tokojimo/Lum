@@ -13,6 +13,9 @@ import pandas as pd
 from scipy.stats import friedmanchisquare, wilcoxon
 
 
+RESULT_COLUMNS = ["condition_1", "condition_2", "n_pairs", "p_raw", "p_holm"]
+
+
 def paired_nonparametric_tests(
     biological: pd.DataFrame, *, value: str, condition: str = "souche",
     identity: tuple[str, ...] = ("experience_id", "replicat", "Groupe"),
@@ -26,10 +29,10 @@ def paired_nonparametric_tests(
     ids = [column for column in identity if column in biological and biological[column].notna().any()]
     ids = ids or [column for column in ("Groupe",) if column in biological]
     if not ids or condition not in biological or value not in biological:
-        return np.nan, pd.DataFrame(columns=["condition_1", "condition_2", "p_raw", "p_holm"])
+        return np.nan, pd.DataFrame(columns=RESULT_COLUMNS)
     table = biological.pivot_table(index=ids, columns=condition, values=value, aggfunc="mean").dropna()
     if len(table) < 3 or table.shape[1] < 2:
-        return np.nan, pd.DataFrame(columns=["condition_1", "condition_2", "p_raw", "p_holm"])
+        return np.nan, pd.DataFrame(columns=RESULT_COLUMNS)
     omnibus = float(friedmanchisquare(*(table[column] for column in table.columns)).pvalue) \
         if table.shape[1] >= 3 else np.nan
     rows = []
@@ -38,7 +41,8 @@ def paired_nonparametric_tests(
             raw = float(wilcoxon(table[left], table[right], alternative="two-sided").pvalue)
         except ValueError:
             raw = 1.0
-        rows.append({"condition_1": left, "condition_2": right, "p_raw": raw})
+        rows.append({"condition_1": left, "condition_2": right,
+                     "n_pairs": len(table), "p_raw": raw})
     result = pd.DataFrame(rows)
     order = result["p_raw"].sort_values().index
     adjusted = pd.Series(index=result.index, dtype=float)

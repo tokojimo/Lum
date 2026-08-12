@@ -347,6 +347,10 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
 
 def _significance_stars(p_value: float) -> str:
     """Return the conventional significance symbol for an adjusted p-value."""
+    # A missing/uncomputable p-value is not evidence of non-significance.  In
+    # particular, labelling NaN as ``ns`` hid failed or impossible tests.
+    if not np.isfinite(p_value):
+        return "NA"
     if p_value < .0001:
         return "****"
     if p_value < .001:
@@ -456,7 +460,12 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
         y = .60 + spacing * level
         p = comparison.p_holm
         value_label = "< 0.0001" if p < .0001 else f"= {p:.3g}"
-        p_label = f"Pvalue {value_label} {_significance_stars(p)}"
+        # Stars are based on the multiplicity-adjusted value.  Showing both
+        # values makes it clear when a raw result loses significance after the
+        # Holm correction instead of making every such result look erroneous.
+        raw_label = "NA" if not np.isfinite(comparison.p_raw) else f"{comparison.p_raw:.3g}"
+        p_label = (f"pHolm {value_label} {_significance_stars(p)} "
+                   f"(raw {raw_label}; n={comparison.n_pairs})")
         axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
                   transform=transform, color="#333333", lw=.7, clip_on=False)
         axis.text((left + right) / 2, y + .006, p_label, transform=transform,
