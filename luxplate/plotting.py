@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from colorsys import hls_to_rgb
 from hashlib import sha256
+from itertools import combinations
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -394,7 +395,8 @@ def _significance_stars(p_value: float) -> str:
 
 def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, *,
                        metric: str, condition: str, y_scale: str, panel_title: str,
-                       seed: int) -> pd.DataFrame:
+                       seed: int, comparison_scope: str = "all",
+                       significant_only: bool = False) -> pd.DataFrame:
     """Draw one metric panel and return its pairwise statistics."""
     conditions = list(dict.fromkeys(biological[condition].astype(str)))
     if condition == "_comparison":
@@ -482,13 +484,28 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     axis.title.set_fontweight("bold"); axis.title.set_ha("left"); axis.title.set_position((0, 1))
     _publication_style(axis)
 
+    requested_pairs = None
+    if condition == "_comparison" and comparison_scope != "all":
+        details = biological[[condition, "_reporter", "_medium"]].drop_duplicates().set_index(condition)
+        requested_pairs = tuple(
+            (left, right) for left, right in combinations(conditions, 2)
+            if ((comparison_scope == "same_strain_across_media"
+                 and details.at[left, "_reporter"] == details.at[right, "_reporter"]
+                 and details.at[left, "_medium"] != details.at[right, "_medium"])
+                or (comparison_scope == "strains_within_medium"
+                    and details.at[left, "_medium"] == details.at[right, "_medium"]
+                    and details.at[left, "_reporter"] != details.at[right, "_reporter"]))
+        )
     omnibus, comparisons = paired_nonparametric_tests(
         biological, value=metric, condition=condition,
         identity=tuple(identity_columns),
+        comparisons=requested_pairs,
     )
     positions = {item: index for index, item in enumerate(conditions)}
     usable = comparisons.loc[comparisons["condition_1"].isin(positions)
                              & comparisons["condition_2"].isin(positions)]
+    if significant_only:
+        usable = usable.loc[usable["p_holm"] < .05]
     transform = blended_transform_factory(axis.transData, axis.transAxes)
     spacing = min(.055, .36 / max(1, len(usable)))
     for level, comparison in enumerate(usable.itertuples(index=False), start=1):
@@ -514,7 +531,8 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
 
 def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "linear",
                        title: str | None = None, group_by: str | None = None,
-                       compare_media: bool = False):
+                       compare_media: bool = False, comparison_scope: str = "all",
+                       significant_only: bool = False):
     """Plot metric distributions, optionally with one panel per medium or strain."""
     required = {"souche", "Groupe", metric}
     if group_by is not None:
@@ -524,6 +542,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         raise ValueError(f"Missing columns for metric: {sorted(missing)}")
     if y_scale not in {"linear", "log"}:
         raise ValueError("Scale must be 'linear' or 'log'.")
+    if comparison_scope not in {"all", "same_strain_across_media", "strains_within_medium"}:
+        raise ValueError(f"Unknown comparison scope: {comparison_scope!r}.")
     numeric = pd.to_numeric(metrics[metric], errors="coerce").replace([np.inf, -np.inf], np.nan)
     technical = metrics.loc[numeric.notna()].copy()
     technical[metric] = numeric.loc[technical.index]
@@ -566,7 +586,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         panel_title = (title or metric) if panel is None else _display_panel(panel)
         statistics = _draw_metric_panel(axes.flat[index], panel_technical, panel_biological,
             metric=metric, condition=condition, y_scale=effective_scale,
-            panel_title=panel_title, seed=1947 + index)
+            panel_title=panel_title, seed=1947 + index, comparison_scope=comparison_scope,
+            significant_only=significant_only)
         if panel is not None:
             statistics = statistics.assign(panel=panel)
         all_statistics.append(statistics)
@@ -648,7 +669,8 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     families: tuple[str, ...] = ("growth", "corrected", "mixed", "peak",
                                 "peak_time", "auc", "peak_fc", "auc_fc", "doubling"),
     panel_by: str = "Groupe", lum_scale: str = "linear", normalized_scale: str = "linear",
-    metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux") -> list[tuple[str, object]]:
+    metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux",
+    comparison_scope: str = "all", significant_only: bool = False) -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
     figures = []
     choices = (("growth", "DO_corr", "croissance", "linear", "Growth"),
@@ -694,11 +716,13 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                     fold_metric = f"{metric}_fold_change"
                     figures.append((suffix, plot_metric_points(
                         fold_changes, metric=fold_metric, y_scale=metric_scale,
-                        title=figure_label, compare_media=True)))
+                        title=figure_label, compare_media=True, comparison_scope=comparison_scope,
+                        significant_only=significant_only)))
                 else:
                     scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
                     figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
-                        title=figure_label, compare_media=True)))
+                        title=figure_label, compare_media=True, comparison_scope=comparison_scope,
+                        significant_only=significant_only)))
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
             uncertainty=uncertainty, title="Targeted control comparison"))

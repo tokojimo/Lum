@@ -737,6 +737,18 @@ with figures_tab:
         uncertainty_label = st.radio(
             "Incertitude de la figure mixte", ["Barres ± SD", "Ruban ± SD"], horizontal=True
         )
+        comparison_labels = {
+            "Toutes les conditions entre elles": "all",
+            "Même souche entre milieux différents": "same_strain_across_media",
+            "Toutes les souches entre elles dans un même milieu": "strains_within_medium",
+        }
+        comparison_label = st.radio(
+            "Comparaisons des tests statistiques", list(comparison_labels), horizontal=True,
+            help="Ce choix s'applique aux figures récapitulatives d'AUC, de pic et de temps de doublement.",
+        )
+        significant_only = st.checkbox(
+            "Afficher uniquement les comparaisons significatives (pHolm < 0,05)", value=False,
+        )
         with st.expander("Pourquoi Friedman plutôt qu'une ANOVA ou un test t ?"):
             st.markdown(
                 "Les mêmes expériences biologiques mesurent plusieurs promoteurs : les observations sont donc "
@@ -771,6 +783,8 @@ with figures_tab:
                         metric_scale="log" if metric_label == "Logarithmique" else "linear",
                         uncertainty="bars" if uncertainty_label.startswith("Barres") else "ribbon",
                         control=control_strain,
+                        comparison_scope=comparison_labels[comparison_label],
+                        significant_only=significant_only,
                     )
                     gallery_progress.progress(65, text="Encodage des formats d'export…")
                     rendered, archive = package_figures(figures, dpi=export_dpi)
