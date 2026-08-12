@@ -435,8 +435,12 @@ def test_fold_change_metrics_use_matched_p0_biological_mean_per_medium():
     p0 = result.loc[result["souche"].eq("P0-lux"), "lum_norm_peak_fold_change"]
     reporter = result.loc[result["souche"].eq("Reporter-lux"), "lum_norm_peak_fold_change"]
     assert set(result["Groupe"]) == {"DMEM", "SCFM2"}
-    assert np.allclose(p0, 1)
-    assert np.allclose(sorted(reporter), sorted([31 / 11, 31 / 11, 61 / 21, 61 / 21]))
+    assert np.allclose(p0, [10 / 11, 12 / 11, 10 / 11, 12 / 11,
+                            20 / 21, 22 / 21, 20 / 21, 22 / 21])
+    assert np.allclose(sorted(reporter), sorted([
+        30 / 11, 32 / 11, 30 / 11, 32 / 11,
+        60 / 21, 62 / 21, 60 / 21, 62 / 21,
+    ]))
 
 
 def test_gallery_adds_peak_and_auc_fold_change_figures_by_medium():
@@ -449,7 +453,10 @@ def test_gallery_adds_peak_and_auc_fold_change_figures_by_medium():
         "auc_luminescence_normalisee_fold_change_P0",
     ]
     assert all("fold change vs P0" in figure.axes[0].get_ylabel() for _, figure in figures)
-    assert all(figure.axes[0].get_title() == "DMEM" for _, figure in figures)
+    assert all(len(figure.axes) == 1 for _, figure in figures)
+    assert all(figure.axes[0].get_title().endswith("fold change vs P0") for _, figure in figures)
+    assert all([tick.get_text() for tick in figure.axes[0].get_xticklabels()] ==
+               ["P0\nDMEM", "Reporter-lux\nDMEM"] for _, figure in figures)
     for _, figure in figures:
         plt.close(figure)
 
