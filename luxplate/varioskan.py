@@ -25,6 +25,8 @@ STRAIN_START = re.compile(
     flags=re.IGNORECASE,
 )
 BLANK_NUMBER = re.compile(r"^(?:blanc|blank)\s*[-_ ]?(\d+)\b", flags=re.IGNORECASE)
+MINICTX_REPORTER = re.compile(r"^MiniCTXlux\s*\((.+)\)$", flags=re.IGNORECASE)
+LUX_SUFFIX = re.compile(r"-lux$", flags=re.IGNORECASE)
 
 
 def clean_text(value: object) -> str:
@@ -32,6 +34,26 @@ def clean_text(value: object) -> str:
     if value is None:
         return ""
     return re.sub(r"\s+", " ", str(value).replace("\xa0", " ")).strip()
+
+
+def normalize_strain_name(value: object) -> str:
+    """Return a canonical name for known equivalent lux reporter spellings.
+
+    Varioskan headers are entered manually and the same chromosomal reporter is
+    commonly written either as ``MiniCTXlux(PspeD2-1A-lux)`` or directly as
+    ``PspeD2-1A-Lux``.  The vector wrapper is not part of the strain identity in
+    this workflow, and ``lux`` capitalization is likewise insignificant.
+    """
+    name = clean_text(value)
+    prefix, separator, construct = name.rpartition("::")
+    if not separator:
+        prefix, construct = "", name
+
+    wrapped = MINICTX_REPORTER.fullmatch(construct)
+    if wrapped:
+        construct = clean_text(wrapped.group(1))
+    construct = LUX_SUFFIX.sub("-lux", construct)
+    return f"{prefix}::{construct}" if separator else construct
 
 
 def find_measurement_sheets(sheet_names: Iterable[str]) -> tuple[str, list[str]]:
@@ -102,6 +124,7 @@ def _sample_metadata(header: str) -> dict[str, str]:
         if strain_match and strain_match.start() > 0:
             medium = clean_text(name[:strain_match.start()])
             strain = clean_text(name[strain_match.start():])
+        strain = normalize_strain_name(strain)
     return {
         "sample_header": header,
         "souche": strain,
