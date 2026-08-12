@@ -376,10 +376,14 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     rng = np.random.default_rng(seed)
     summaries = biological.groupby(condition, sort=False)[metric].agg(["mean", "std"])
     for condition_index, item in enumerate(conditions):
-        values = biological.loc[biological[condition].astype(str).eq(item), metric].to_numpy(float)
         raw = technical.loc[technical[condition].astype(str).eq(item), metric].to_numpy(float)
+        values = biological.loc[biological[condition].astype(str).eq(item), metric].to_numpy(float)
+        # Fold changes retain the technical ratios specifically so their boxes
+        # show the observed dispersion.  Biological means remain the only
+        # values used for the large points and inferential statistics below.
+        box_values = raw if metric.endswith("_fold_change") else values
         color = colors[item]
-        axis.boxplot([values], positions=[condition_index], widths=.55, patch_artist=True,
+        axis.boxplot([box_values], positions=[condition_index], widths=.55, patch_artist=True,
             showfliers=False, medianprops={"color": color, "linewidth": 1.5},
             boxprops={"facecolor": color, "alpha": .20, "edgecolor": color},
             whiskerprops={"color": color}, capprops={"color": color})
@@ -572,7 +576,12 @@ def metric_fold_change_vs_control(metrics: pd.DataFrame, *, metric: str,
     denominators = (control_rows.groupby(denominator_keys, dropna=False, sort=False)[metric]
                     .mean().rename("_control_value").reset_index())
     fold_metric = f"{metric}_fold_change"
-    result = biological.merge(denominators, on=denominator_keys, how="inner", validate="many_to_one")
+    # Return the technical observations rather than the already collapsed
+    # biological table.  Each value is still divided by its matched biological
+    # P0 mean, but retaining these rows lets the figure display the experimental
+    # dispersion while ``plot_metric_points`` independently reconstructs the
+    # biological means used by the statistical tests.
+    result = work.merge(denominators, on=denominator_keys, how="inner", validate="many_to_one")
     valid_denominator = result["_control_value"].ne(0) & result["_control_value"].notna()
     result[fold_metric] = result[metric] / result["_control_value"].where(valid_denominator)
     result["Groupe"] = result["Milieu"]
@@ -646,7 +655,7 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                     fold_metric = f"{metric}_fold_change"
                     figures.append((suffix, plot_metric_points(
                         fold_changes, metric=fold_metric, y_scale=metric_scale,
-                        title=figure_label, group_by="Groupe")))
+                        title=figure_label, compare_media=True)))
                 else:
                     scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
                     figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
