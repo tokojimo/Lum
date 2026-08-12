@@ -628,11 +628,13 @@ def plot_raw_curves(data: pd.DataFrame):
 
 
 def build_guided_raw_figures(data: pd.DataFrame, *, sample_type: str) -> list[tuple[str, object]]:
-    """Build one static DO/luminescence figure per biological replicate.
+    """Build one static DO/luminescence figure per strain and medium.
 
-    Technical wells belonging to the same strain, medium and biological replicate
-    stay together in a figure.  Keeping these previews as Matplotlib figures avoids
-    the much heavier interactive charts in the guided import screen.
+    A workbook is one independent biological replicate; ``replicat`` and the
+    sample headers inside that workbook identify technical replicates.  Each
+    biological replicate therefore occupies one row and all of its technical
+    curves are overlaid in that row.  Axis limits are shared across rows so the
+    biological replicates can be compared without a misleading change of scale.
     """
     required = {"temps_h", "souche", "Groupe", "replicat", "sample_header", "type",
                 "DO_brute", "Lum_brute"}
@@ -640,21 +642,40 @@ def build_guided_raw_figures(data: pd.DataFrame, *, sample_type: str) -> list[tu
     if missing:
         raise ValueError(f"Colonnes manquantes pour la figure : {sorted(missing)}")
     work = data.loc[data["type"].astype(str).str.lower().eq(sample_type.lower())].copy()
+    work["_milieu"] = work["Groupe"].map(_medium_label)
+    if "experience_id" in work and work["experience_id"].notna().any():
+        work["_experience_biologique"] = work["experience_id"].astype(str)
+    elif "experience" in work and work["experience"].notna().any():
+        work["_experience_biologique"] = work["experience"].astype(str)
+    else:
+        # A table parsed from a single workbook has no experiment column yet.
+        work["_experience_biologique"] = "Expérience 1"
     figures: list[tuple[str, object]] = []
-    for keys, replicate in work.groupby(["Groupe", "souche", "replicat"], dropna=False, sort=False):
-        medium, strain, biological_replicate = keys
-        title = f"{medium} · {strain} · biological replicate {biological_replicate}"
-        figure, axes = plt.subplots(1, 2, figsize=(10, 3.6), constrained_layout=True)
-        for header, curve in replicate.groupby("sample_header", sort=False):
-            curve = curve.sort_values("temps_h", kind="stable")
-            label = str(header)
-            axes[0].plot(curve["temps_h"], curve["DO_brute"], lw=1.4, label=label)
-            axes[1].plot(curve["temps_h"], curve["Lum_brute"], lw=1.4, label=label)
-        axes[0].set(title="Optical density", xlabel="Time (h)", ylabel=r"Raw OD$_{600}$")
-        axes[1].set(title="Luminescence", xlabel="Time (h)", ylabel="Raw luminescence (RLU)")
-        for axis in axes:
-            _publication_style(axis)
-            axis.legend(fontsize="x-small", frameon=False, loc="best")
+    for (medium, strain), condition in work.groupby(["_milieu", "souche"], dropna=False, sort=False):
+        biological = list(condition.groupby("_experience_biologique", dropna=False, sort=False))
+        title = f"{medium} · {strain}"
+        figure, axes = plt.subplots(
+            len(biological), 2, figsize=(10, 3.3 * len(biological)),
+            constrained_layout=True, squeeze=False, sharex=True, sharey="col",
+        )
+        for row, (experience, replicate) in enumerate(biological):
+            for technical_number, (header, curve) in enumerate(
+                replicate.groupby("sample_header", sort=False), start=1
+            ):
+                curve = curve.sort_values("temps_h", kind="stable")
+                technical = curve["replicat"].iloc[0]
+                label = f"Rép. technique {technical}" if pd.notna(technical) else f"Rép. technique {technical_number}"
+                axes[row, 0].plot(curve["temps_h"], curve["DO_brute"], lw=1.4, label=label)
+                axes[row, 1].plot(curve["temps_h"], curve["Lum_brute"], lw=1.4, label=label)
+            axes[row, 0].set_ylabel(f"{experience}\n" + r"OD$_{600}$ brute")
+            axes[row, 1].set_ylabel(f"{experience}\nLuminescence brute (RLU)")
+            for axis in axes[row]:
+                _publication_style(axis)
+                axis.legend(fontsize="x-small", frameon=False, loc="best")
+        axes[0, 0].set_title("Densité optique")
+        axes[0, 1].set_title("Luminescence")
+        axes[-1, 0].set_xlabel("Temps (h)")
+        axes[-1, 1].set_xlabel("Temps (h)")
         figure.suptitle(title, fontsize=11, fontweight="bold")
         figures.append((title, figure))
     return figures

@@ -177,11 +177,17 @@ with guided_tab:
                     )
                 info_tabs = st.tabs(["Courbes des blancs", "Courbes des échantillons"])
                 with info_tabs[0]:
-                    st.caption("Une figure statique par réplicat biologique, avec la DO et la luminescence.")
+                    st.caption(
+                        "Une ligne par expérience indépendante (réplicat biologique) ; les courbes d'une "
+                        "même ligne sont les réplicats techniques. Les échelles sont identiques entre les lignes."
+                    )
                     for _, figure in cached_guided_raw_figures(guided_selected, sample_type="blanc"):
                         st.pyplot(figure, use_container_width=True)
                 with info_tabs[1]:
-                    st.caption("Une figure statique par souche, milieu et réplicat biologique.")
+                    st.caption(
+                        "Une figure par souche et milieu, avec une ligne par fichier Excel (réplicat biologique) "
+                        "et toutes ses courbes techniques. Les maxima OD600 et RLU sont communs aux lignes."
+                    )
                     for _, figure in cached_guided_raw_figures(guided_selected, sample_type="souche"):
                         st.pyplot(figure, use_container_width=True)
 
