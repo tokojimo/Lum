@@ -125,6 +125,26 @@ def test_reporter_colors_are_fixed_across_order_and_figure_families():
     plt.close(mixed)
 
 
+def test_construct_names_keep_reporter_labels_and_colors():
+    constructs = {
+        "14.1Ac attB::PspeD-lux": ("PspeD", "#D55E00"),
+        "14.1Ac attB::PspeE-lux": ("PspeE", "#E69F00"),
+    }
+    data = pd.concat([
+        _publication_table().iloc[:6].assign(souche=construct) for construct in constructs
+    ], ignore_index=True)
+
+    figure = plot_publication_panels(data, value="Lum_corr")
+
+    assert [text.get_text() for text in figure.legends[0].get_texts()] == [
+        expected[0] for expected in constructs.values()
+    ]
+    assert [container.lines[0].get_color() for container in figure.axes[0].containers] == [
+        expected[1] for expected in constructs.values()
+    ]
+    plt.close(figure)
+
+
 def test_large_legends_leave_space_above_medium_titles():
     strains = ["P0-lux", "PspeD-lux", "PspeD2-1A-lux", "PspeD2-3B-lux",
                "PspeE-lux", *[f"Reporter-{index}" for index in range(7)]]
@@ -229,6 +249,32 @@ def test_metric_points_make_one_panel_per_medium_and_label_pvalues_with_stars():
     labels = [text.get_text() for axis in figure.axes for text in axis.texts]
     assert any(label.startswith("Pvalue = ") and label.endswith(("*", "ns")) for label in labels)
     assert not any("pHolm" in label for label in labels)
+    plt.close(figure)
+
+
+def test_metric_points_compare_every_strain_medium_pair_in_one_figure():
+    metrics = pd.DataFrame([
+        {"souche": strain, "Groupe": f"Experiment {experiment} | {medium}",
+         "experience_id": f"exp{experiment}", "replicat": 1,
+         "lum_norm_auc": experiment + strain_index * 10 + medium_index * 3}
+        for experiment in range(1, 7)
+        for strain_index, strain in enumerate(("PspeD-lux", "PspeE-lux", "P0-lux"))
+        for medium_index, medium in enumerate(("Milieu 1", "Milieu 2"))
+    ])
+
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", compare_media=True, title="AUC"
+    )
+
+    assert len(figure.axes) == 1
+    assert [label.get_text() for label in figure.axes[0].get_xticklabels()] == [
+        "PspeD\nMilieu 1", "PspeD\nMilieu 2", "PspeE\nMilieu 1",
+        "PspeE\nMilieu 2", "P0\nMilieu 1", "P0\nMilieu 2",
+    ]
+    # Six conditions yield all 15 Holm-corrected pairwise comparisons.
+    assert len(figure._luxplate_statistics) == 15
+    assert len([text for text in figure.axes[0].texts if text.get_text().startswith("Pvalue")]) == 15
+    assert figure.get_figheight() > 6
     plt.close(figure)
 
 

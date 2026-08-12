@@ -29,6 +29,21 @@ REPORTER_COLORS = {
     "pspee": "#E69F00",
 }
 
+REPORTER_NAMES = {
+    "psped2-1a": "PspeD2-1A",
+    "psped2-3b": "PspeD2-3B",
+    "psped": "PspeD",
+    "pspee": "PspeE",
+    "p0": "P0",
+}
+
+
+def _reporter_key(value: object) -> str | None:
+    """Find a reporter even in construct names such as ``attB::PspeE-lux``."""
+    normalized = re.sub(r"[^a-z0-9]", "", str(value).casefold())
+    # Longest first: PspeD must not capture either PspeD2 reporter.
+    return next((key for key in REPORTER_NAMES if re.sub(r"[^a-z0-9]", "", key) in normalized), None)
+
 
 def _publication_style(axis):
     axis.spines[["top", "right"]].set_visible(False)
@@ -50,11 +65,8 @@ def _series_label(row: pd.Series) -> str:
 
 def _display_strain(value: object) -> str:
     """Use compact reporter names on axes while retaining full names in the data."""
-    strain = str(value)
-    for reporter in ("PspeD2-1A-lux", "PspeD2-3B-lux", "P0-lux"):
-        if reporter.casefold() in strain.casefold():
-            return reporter.removesuffix("-lux")
-    return strain
+    key = _reporter_key(value)
+    return REPORTER_NAMES[key] if key else str(value)
 
 
 def _display_panel(value: object) -> str:
@@ -97,13 +109,14 @@ def _strain_colors(data: pd.DataFrame) -> dict[str, str]:
     strains = list(dict.fromkeys(data["souche"].dropna().astype(str)))
     colors: dict[str, str] = {}
     for strain in strains:
-        key = re.sub(r"(?:[-_ ]?lux)$", "", strain.strip(), flags=re.IGNORECASE).casefold()
-        if key in REPORTER_COLORS:
+        key = _reporter_key(strain)
+        if key:
             colors[strain] = REPORTER_COLORS[key]
             continue
         # A digest rather than the position in the input makes an unfamiliar
         # strain retain its color when strains are added or rows are reordered.
-        digest = sha256(key.encode("utf-8")).digest()
+        fallback_key = re.sub(r"(?:[-_ ]?lux)$", "", strain.strip(), flags=re.IGNORECASE).casefold()
+        digest = sha256(fallback_key.encode("utf-8")).digest()
         hue = int.from_bytes(digest[:2], "big") / 65535
         saturation = .58 + digest[2] / 255 * .16
         lightness = .38 + digest[3] / 255 * .12
@@ -347,10 +360,16 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
                        seed: int) -> pd.DataFrame:
     """Draw one metric panel and return its pairwise statistics."""
     conditions = list(dict.fromkeys(biological[condition].astype(str)))
-    colors = _strain_colors(biological) if condition == "souche" else {
-        item: PUBLICATION_COLORS[index % len(PUBLICATION_COLORS)]
-        for index, item in enumerate(conditions)
-    }
+    if condition == "_comparison":
+        reporter_colors = _strain_colors(pd.DataFrame({"souche": biological["_reporter"]}))
+        colors = {item: reporter_colors[biological.loc[
+            biological[condition].astype(str).eq(item), "_reporter"
+        ].iloc[0]] for item in conditions}
+    else:
+        colors = _strain_colors(biological) if condition == "souche" else {
+            item: PUBLICATION_COLORS[index % len(PUBLICATION_COLORS)]
+            for index, item in enumerate(conditions)
+        }
     rng = np.random.default_rng(seed)
     summaries = biological.groupby(condition, sort=False)[metric].agg(["mean", "std"])
     for condition_index, item in enumerate(conditions):
@@ -387,12 +406,36 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
         "lum_norm_peak_time_h": "Time of normalized luminescence peak (h)",
         "lum_norm_auc": r"Normalized luminescence AUC (RLU/OD$_{600}$)·h",
         "doubling_time_h": "Doubling time (h)"}
-    axis.set_xticks(range(len(conditions)), [(_display_strain(item) if condition == "souche" else
-                                              _display_panel(item)) for item in conditions])
-    axis.set(xlabel="Reporter" if condition == "souche" else "Medium",
+    display_conditions = []
+    for item in conditions:
+        if condition == "souche":
+            display_conditions.append(_display_strain(item))
+        elif condition == "_comparison":
+            row = biological.loc[biological[condition].astype(str).eq(item)].iloc[0]
+            display_conditions.append(f"{_display_strain(row['_reporter'])}\n{row['_medium']}")
+        else:
+            display_conditions.append(_display_panel(item))
+    axis.set_xticks(range(len(conditions)), display_conditions)
+    axis.set(xlabel="Reporter · medium" if condition == "_comparison" else
+             ("Reporter" if condition == "souche" else "Medium"),
              ylabel=metric_labels.get(metric, metric), title=panel_title)
     axis.set_yscale(y_scale)
-    axis.margins(y=.30)
+    # Combined reporter/medium figures need a genuine annotation band above the
+    # boxes.  The extra margin keeps even a dense complete pairwise test matrix
+    # from being printed over the data.
+    axis.margins(y=.65 if condition == "_comparison" else .30)
+    if condition == "_comparison":
+        finite = biological[metric].to_numpy(float)
+        finite = finite[np.isfinite(finite)]
+        if len(finite) and y_scale == "linear":
+            low, high = float(finite.min()), float(finite.max())
+            span = max(high - low, abs(high) * .05, 1e-9)
+            axis.set_ylim(low - .12 * span, high + 1.20 * span)
+        elif len(finite):
+            low, high = float(finite.min()), float(finite.max())
+            log_span = max(np.log(high) - np.log(low), .1)
+            axis.set_ylim(np.exp(np.log(low) - .12 * log_span),
+                          np.exp(np.log(high) + 1.20 * log_span))
     axis.title.set_fontweight("bold"); axis.title.set_ha("left"); axis.title.set_position((0, 1))
     _publication_style(axis)
 
@@ -404,10 +447,10 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     usable = comparisons.loc[comparisons["condition_1"].isin(positions)
                              & comparisons["condition_2"].isin(positions)]
     transform = blended_transform_factory(axis.transData, axis.transAxes)
-    spacing = min(.055, .15 / max(1, len(usable)))
+    spacing = min(.055, .36 / max(1, len(usable)))
     for level, comparison in enumerate(usable.itertuples(index=False), start=1):
         left, right = positions[comparison.condition_1], positions[comparison.condition_2]
-        y = .82 + spacing * level
+        y = .60 + spacing * level
         p = comparison.p_holm
         value_label = "< 0.0001" if p < .0001 else f"= {p:.3g}"
         p_label = f"Pvalue {value_label} {_significance_stars(p)}"
@@ -422,7 +465,8 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
 
 
 def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "linear",
-                       title: str | None = None, group_by: str | None = None):
+                       title: str | None = None, group_by: str | None = None,
+                       compare_media: bool = False):
     """Plot metric distributions, optionally with one panel per medium or strain."""
     required = {"souche", "Groupe", metric}
     if group_by is not None:
@@ -450,9 +494,23 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
               list(dict.fromkeys(biological[group_by].dropna().astype(str))))
     if not panels:
         raise ValueError("No usable data available for the metric figure.")
-    condition = "Groupe" if group_by == "souche" else "souche"
+    if compare_media:
+        biological["_reporter"] = biological["souche"].astype(str)
+        biological["_medium"] = biological["Groupe"].map(_medium_label)
+        biological["_comparison"] = (biological["_reporter"] + "\0" + biological["_medium"])
+        technical["_reporter"] = technical["souche"].astype(str)
+        technical["_medium"] = technical["Groupe"].map(_medium_label)
+        technical["_comparison"] = technical["_reporter"] + "\0" + technical["_medium"]
+        condition = "_comparison"
+        panels = [None]
+    else:
+        condition = "Groupe" if group_by == "souche" else "souche"
     ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
-    figure, axes = plt.subplots(nrows, ncols, figsize=(max(6, 4.3 * ncols), 4.5 * nrows), squeeze=False)
+    condition_count = biological[condition].nunique()
+    comparison_count = condition_count * (condition_count - 1) // 2
+    extra_height = min(8, .18 * comparison_count) if compare_media else 0
+    width = max(6, 1.35 * condition_count) if compare_media else max(6, 4.3 * ncols)
+    figure, axes = plt.subplots(nrows, ncols, figsize=(width, (4.5 + extra_height) * nrows), squeeze=False)
     all_statistics = []
     for index, panel in enumerate(panels):
         panel_technical = technical if panel is None else technical.loc[technical[group_by].astype(str).eq(panel)]
@@ -476,7 +534,7 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     if group_by is not None:
         figure.suptitle(title or metric, fontweight="bold", y=.995)
     figure._luxplate_statistics = pd.concat(all_statistics, ignore_index=True) if all_statistics else pd.DataFrame()
-    figure.tight_layout(rect=(0, 0, 1, .96) if group_by is not None else None)
+    figure.tight_layout(rect=(0, 0, 1, .96) if group_by is not None and not compare_media else None)
     return figure
 
 def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
@@ -540,7 +598,7 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                 metric, suffix, figure_label = metric_families[family]
                 scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
                 figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
-                    title=figure_label, group_by=panel_by)))
+                    title=figure_label, compare_media=True)))
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
             uncertainty=uncertainty, title="Targeted control comparison"))
