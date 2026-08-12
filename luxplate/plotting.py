@@ -129,11 +129,16 @@ def _shortest_experiment_end(data: pd.DataFrame) -> float | None:
 
 
 def _set_common_time_end(axes, data: pd.DataFrame) -> None:
-    """Give time-course axes the end time of the shortest experiment."""
+    """Show time courses from zero to the end of the shortest experiment.
+
+    Matplotlib otherwise adds a horizontal margin before the first acquisition.
+    Its automatic tick locator can then label that empty margin with a negative
+    time even when every experiment starts at zero.
+    """
     time_end = _shortest_experiment_end(data)
     if time_end is not None:
         for axis in axes:
-            axis.set_xlim(right=time_end)
+            axis.set_xlim(left=0, right=time_end)
 
 
 def _strain_colors(data: pd.DataFrame) -> dict[str, str]:

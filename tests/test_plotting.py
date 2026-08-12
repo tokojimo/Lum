@@ -156,8 +156,8 @@ def test_time_course_panels_end_at_shortest_experiment_duration():
     publication = plot_publication_panels(data, value="Lum_corr", group_by="souche")
     mixed = plot_mixed_panels(data)
 
-    assert all(axis.get_xlim()[1] == 2.0 for axis in publication.axes)
-    assert all(axis.get_xlim()[1] == 2.0 for axis in mixed.axes)
+    assert all(axis.get_xlim() == (0.0, 2.0) for axis in publication.axes)
+    assert all(axis.get_xlim() == (0.0, 2.0) for axis in mixed.axes)
     plt.close(publication)
     plt.close(mixed)
 
