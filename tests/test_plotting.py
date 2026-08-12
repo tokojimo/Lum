@@ -477,6 +477,22 @@ def test_pooled_summary_matches_acquisition_sequence_across_shifted_experiments(
     ])
 
 
+def test_pooled_summary_uses_group_experiments_not_technical_wells_for_sd():
+    data = pd.DataFrame([
+        {"Groupe": f"Experiment {experiment} | LB", "replicat": 1,
+         "sample_header": f"PspeD2-1A-{well}", "temps_h": 7.0,
+         "Lum_corr": biological_value + technical_offset}
+        for experiment, biological_value in enumerate((2.3e6, 1.5e6, 4.4e6), start=1)
+        for well, technical_offset in (("A1", -1e4), ("A2", 1e4))
+    ])
+
+    summary = _aligned_biological_summary(data, "Lum_corr")
+
+    assert summary.loc[0, "n_biological"] == 3
+    assert summary.loc[0, "mean"] == pytest.approx(np.mean([2.3e6, 1.5e6, 4.4e6]))
+    assert summary.loc[0, "std"] == pytest.approx(np.std([2.3e6, 1.5e6, 4.4e6], ddof=1))
+
+
 def test_metric_gallery_uses_boxplots_and_includes_peak_time():
     figures = build_publication_figures(_publication_table(), families=("peak", "peak_time", "auc", "doubling"),
                                         metric_scale="linear")

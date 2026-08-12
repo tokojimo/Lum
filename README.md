@@ -140,6 +140,10 @@ normalized luminescence, a dual-axis OD/non-normalized-luminescence view, and
 boxplots for normalized peak, peak time, normalized AUC, and doubling time. Each
 boxplot reports the exact biological mean.
 
+Historical datasets that lack an explicit `experience_id` remain compatible:
+an `Experiment N | medium` group prefix is used as the independent-experiment
+identity, so technical wells cannot artificially narrow pooled SD error bars.
+
 ## Export formats
 
 Figures are saved directly from matplotlib as PNG (150/300/600 dpi), vector
