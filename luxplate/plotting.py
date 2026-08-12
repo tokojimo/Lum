@@ -711,6 +711,15 @@ def build_guided_raw_figures(data: pd.DataFrame, *, sample_type: str) -> list[tu
     else:
         # A table parsed from a single workbook has no experiment column yet.
         work["_experience_biologique"] = "Expérience 1"
+    # Keep media as the outer display level.  Input tables are commonly
+    # concatenated workbook by workbook; relying on their row order would show
+    # every medium from biological replicate 1 before biological replicate 2.
+    # Stable ranks instead produce M1/bio1, M1/bio2, M2/bio1, M2/bio2.
+    medium_order = {value: index for index, value in enumerate(work["_milieu"].drop_duplicates())}
+    strain_order = {value: index for index, value in enumerate(work["souche"].drop_duplicates())}
+    work["_ordre_milieu"] = work["_milieu"].map(medium_order)
+    work["_ordre_souche"] = work["souche"].map(strain_order)
+    work = work.sort_values(["_ordre_milieu", "_ordre_souche"], kind="stable")
     figures: list[tuple[str, object]] = []
     for (medium, strain), condition in work.groupby(["_milieu", "souche"], dropna=False, sort=False):
         biological = list(condition.groupby("_experience_biologique", dropna=False, sort=False))
@@ -724,8 +733,13 @@ def build_guided_raw_figures(data: pd.DataFrame, *, sample_type: str) -> list[tu
                 replicate.groupby("sample_header", sort=False), start=1
             ):
                 curve = curve.sort_values("temps_h", kind="stable")
-                technical = curve["replicat"].iloc[0]
-                label = f"Rép. technique {technical}" if pd.notna(technical) else f"Rép. technique {technical_number}"
+                well = curve["puits"].iloc[0] if "puits" in curve else pd.NA
+                if pd.notna(well) and str(well).strip():
+                    label = f"Rép. technique ({str(well).strip()})"
+                else:
+                    technical = curve["replicat"].iloc[0]
+                    number = technical if pd.notna(technical) else technical_number
+                    label = f"Rép. technique {number}"
                 axes[row, 0].plot(curve["temps_h"], curve["DO_brute"], lw=1.4, label=label)
                 axes[row, 1].plot(curve["temps_h"], curve["Lum_brute"], lw=1.4, label=label)
             axes[row, 0].set_ylabel(f"{experience}\n" + r"OD$_{600}$ brute")
