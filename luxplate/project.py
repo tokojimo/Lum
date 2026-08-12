@@ -26,6 +26,12 @@ PROJECT_KEYS = (
     "validated_qc_journal", "qc_validated", "blank_correction_result",
     "normalization_result", "kinetics_result", "guided_decisions",
     "guided_complete_result",
+    # Guided-analysis context needed to reopen a project at the same point of
+    # the workflow, without requiring the original workbooks again.
+    "guided_signature", "guided_media", "guided_strains", "guided_min_od",
+    "guided_consecutive", "guided_window", "guided_r2", "guided_figure_families",
+    "guided_figure_panels", "guided_figure_lum_scale", "guided_export_dpi",
+    "guided_directional_comparisons_stack",
 )
 
 
