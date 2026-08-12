@@ -11,7 +11,7 @@ from luxplate.plotting import (build_guided_raw_figures, build_publication_figur
 from test_workflow import workflow_table
 
 
-def test_guided_raw_figures_separate_sample_types_and_biological_replicates():
+def test_guided_raw_figures_group_technical_replicates_in_one_biological_row():
     data = workflow_table()
     second_replicate = data.loc[data["type"].eq("souche")].copy()
     second_replicate["replicat"] = 2
@@ -22,9 +22,29 @@ def test_guided_raw_figures_separate_sample_types_and_biological_replicates():
     sample_figures = build_guided_raw_figures(data, sample_type="souche")
 
     assert len(blank_figures) == 1
-    assert len(sample_figures) == 4
+    assert len(sample_figures) == 2
     assert all(len(figure.axes) == 2 for _, figure in blank_figures + sample_figures)
     for _, figure in blank_figures + sample_figures:
+        plt.close(figure)
+
+
+def test_guided_raw_figures_put_excel_experiments_on_rows_with_shared_scales():
+    first = workflow_table().assign(experience="Expérience 1", Groupe="exp1|M1")
+    second = workflow_table().assign(
+        experience="Expérience 2", Groupe="exp2|M1",
+        DO_brute=lambda frame: frame["DO_brute"] * 3,
+        Lum_brute=lambda frame: frame["Lum_brute"] * 10,
+    )
+
+    figures = build_guided_raw_figures(pd.concat([first, second]), sample_type="souche")
+
+    assert len(figures) == 2
+    for _, figure in figures:
+        assert len(figure.axes) == 4
+        assert figure.axes[0].get_ylim() == figure.axes[2].get_ylim()
+        assert figure.axes[1].get_ylim() == figure.axes[3].get_ylim()
+        assert "Expérience 1" in figure.axes[0].get_ylabel()
+        assert "Expérience 2" in figure.axes[2].get_ylabel()
         plt.close(figure)
 
 
