@@ -19,6 +19,7 @@ RESULT_COLUMNS = ["condition_1", "condition_2", "n_pairs", "p_raw", "p_holm"]
 def paired_nonparametric_tests(
     biological: pd.DataFrame, *, value: str, condition: str = "souche",
     identity: tuple[str, ...] = ("experience_id", "replicat", "Groupe"),
+    comparisons: tuple[tuple[str, str], ...] | None = None,
 ) -> tuple[float, pd.DataFrame]:
     """Return a Friedman p-value and Holm-adjusted paired Wilcoxon comparisons.
 
@@ -36,7 +37,11 @@ def paired_nonparametric_tests(
     omnibus = float(friedmanchisquare(*(table[column] for column in table.columns)).pvalue) \
         if table.shape[1] >= 3 else np.nan
     rows = []
-    for left, right in combinations(table.columns, 2):
+    available_pairs = list(combinations(table.columns, 2))
+    if comparisons is not None:
+        requested = {frozenset(pair) for pair in comparisons}
+        available_pairs = [pair for pair in available_pairs if frozenset(pair) in requested]
+    for left, right in available_pairs:
         try:
             raw = float(wilcoxon(table[left], table[right], alternative="two-sided").pvalue)
         except ValueError:
@@ -44,6 +49,8 @@ def paired_nonparametric_tests(
         rows.append({"condition_1": left, "condition_2": right,
                      "n_pairs": len(table), "p_raw": raw})
     result = pd.DataFrame(rows)
+    if result.empty:
+        return omnibus, pd.DataFrame(columns=RESULT_COLUMNS)
     order = result["p_raw"].sort_values().index
     adjusted = pd.Series(index=result.index, dtype=float)
     running = 0.0

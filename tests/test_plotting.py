@@ -366,6 +366,33 @@ def test_metric_points_compare_every_strain_medium_pair_in_one_figure():
     plt.close(figure)
 
 
+def test_metric_points_can_select_comparison_scope_and_significance_display():
+    metrics = pd.DataFrame([
+        {"souche": strain, "Groupe": medium, "experience_id": f"exp{experiment}",
+         "replicat": 1, "lum_norm_auc": experiment + strain_index * 10 + medium_index * 3}
+        for experiment in range(1, 7)
+        for strain_index, strain in enumerate(("A", "B", "C"))
+        for medium_index, medium in enumerate(("M1", "M2"))
+    ])
+
+    same_strain = plot_metric_points(
+        metrics, metric="lum_norm_auc", compare_media=True,
+        comparison_scope="same_strain_across_media",
+    )
+    within_medium = plot_metric_points(
+        metrics, metric="lum_norm_auc", compare_media=True,
+        comparison_scope="strains_within_medium", significant_only=True,
+    )
+
+    assert len(same_strain._luxplate_statistics) == 3
+    assert len(within_medium._luxplate_statistics) == 6
+    labels = [text.get_text() for text in within_medium.axes[0].texts
+              if text.get_text().startswith("pHolm")]
+    assert len(labels) == sum(within_medium._luxplate_statistics["p_holm"] < .05)
+    plt.close(same_strain)
+    plt.close(within_medium)
+
+
 def test_gallery_can_select_curve_families():
     figures = build_publication_figures(
         _publication_table(), families=("growth", "mixed"), uncertainty="ribbon"
