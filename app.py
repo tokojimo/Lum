@@ -316,8 +316,10 @@ with guided_tab:
                             "Luminescence non normalisée": "corrected",
                             "Double axe DO + luminescence non normalisée": "mixed",
                             "Pic normalisé": "peak",
+                            "Pic normalisé — fold change vs P0 par milieu": "peak_fc",
                             "Temps du pic normalisé": "peak_time",
                             "AUC normalisée": "auc",
+                            "AUC normalisée — fold change vs P0 par milieu": "auc_fc",
                             "Temps de doublement": "doubling",
                         }
                         guided_figure_labels = st.multiselect(
@@ -683,6 +685,8 @@ with figures_tab:
             "Double axe DO + luminescence non normalisée": "mixed",
             "Pic normalisé": "peak", "Temps du pic normalisé": "peak_time",
             "AUC normalisée": "auc", "Temps de doublement": "doubling",
+            "Pic normalisé — fold change vs P0 par milieu": "peak_fc",
+            "AUC normalisée — fold change vs P0 par milieu": "auc_fc",
             "Comparaisons ciblées au contrôle": "control",
         }
         selected_labels = st.multiselect(

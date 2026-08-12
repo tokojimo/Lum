@@ -408,6 +408,8 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     metric_labels = {"lum_norm_peak": r"Peak normalized luminescence (RLU/OD$_{600}$)",
         "lum_norm_peak_time_h": "Time of normalized luminescence peak (h)",
         "lum_norm_auc": r"Normalized luminescence AUC (RLU/OD$_{600}$)·h",
+        "lum_norm_peak_fold_change": "Peak normalized luminescence (fold change vs P0)",
+        "lum_norm_auc_fold_change": "Normalized luminescence AUC (fold change vs P0)",
         "doubling_time_h": "Doubling time (h)"}
     display_conditions = []
     for item in conditions:
@@ -540,6 +542,42 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     figure.tight_layout(rect=(0, 0, 1, .96) if group_by is not None and not compare_media else None)
     return figure
 
+
+def metric_fold_change_vs_control(metrics: pd.DataFrame, *, metric: str,
+                                  control: str = "P0-lux") -> pd.DataFrame:
+    """Return biological metric means divided by the matched control per medium.
+
+    Ratios are calculated only between observations from the same independent
+    experiment/replicate and medium.  Technical series are averaged before the
+    division, so adding technical wells cannot inflate the biological N.
+    """
+    required = {"souche", "Groupe", metric}
+    missing = required.difference(metrics.columns)
+    if missing:
+        raise ValueError(f"Missing columns for fold change: {sorted(missing)}")
+    work = metrics.copy()
+    work[metric] = pd.to_numeric(work[metric], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    work = work.loc[work[metric].notna()]
+    work["Milieu"] = work["Groupe"].map(_medium_label)
+    identities = [column for column in ("experience_id", "replicat")
+                  if column in work and work[column].notna().any()]
+    grouping = ["souche", "Milieu", *identities]
+    biological = work.groupby(grouping, dropna=False, sort=False)[metric].mean().reset_index()
+    exact_control = biological["souche"].astype(str).str.casefold().eq(control.casefold())
+    reporter_control = biological["souche"].map(_reporter_key).eq("p0")
+    control_rows = biological.loc[exact_control if exact_control.any() else reporter_control]
+    if control_rows.empty:
+        raise ValueError(f"Control {control!r} is absent from the kinetic metrics.")
+    denominator_keys = ["Milieu", *identities]
+    denominators = (control_rows.groupby(denominator_keys, dropna=False, sort=False)[metric]
+                    .mean().rename("_control_value").reset_index())
+    fold_metric = f"{metric}_fold_change"
+    result = biological.merge(denominators, on=denominator_keys, how="inner", validate="many_to_one")
+    valid_denominator = result["_control_value"].ne(0) & result["_control_value"].notna()
+    result[fold_metric] = result[metric] / result["_control_value"].where(valid_denominator)
+    result["Groupe"] = result["Milieu"]
+    return result.drop(columns=["_control_value"])
+
 def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
                               lum_scale: str = "linear", uncertainty: str = "bars",
                               title: str = "Control comparison") -> list[tuple[str, object]]:
@@ -560,7 +598,7 @@ def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
 
 def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     families: tuple[str, ...] = ("growth", "corrected", "mixed", "peak",
-                                "peak_time", "auc", "doubling"),
+                                "peak_time", "auc", "peak_fc", "auc_fc", "doubling"),
     panel_by: str = "Groupe", lum_scale: str = "linear", normalized_scale: str = "linear",
     metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux") -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
@@ -592,16 +630,27 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                        "peak_time": ("lum_norm_peak_time_h", "temps_pic_luminescence_normalisee",
                                      "Time of normalized luminescence peak"),
                        "auc": ("lum_norm_auc", "auc_luminescence_normalisee", "Normalized luminescence AUC"),
+                       "peak_fc": ("lum_norm_peak", "pic_luminescence_normalisee_fold_change_P0",
+                                   "Peak normalized luminescence — fold change vs P0"),
+                       "auc_fc": ("lum_norm_auc", "auc_luminescence_normalisee_fold_change_P0",
+                                  "Normalized luminescence AUC — fold change vs P0"),
                        "doubling": ("doubling_time_h", "temps_doublement", "Doubling time")}
     requested = set(families).intersection(metric_families)
     if requested:
         metrics = run_kinetics(data).series_metrics
-        for family in ("peak", "peak_time", "auc", "doubling"):
+        for family in ("peak", "peak_time", "auc", "peak_fc", "auc_fc", "doubling"):
             if family in requested:
                 metric, suffix, figure_label = metric_families[family]
-                scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
-                figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
-                    title=figure_label, compare_media=True)))
+                if family.endswith("_fc"):
+                    fold_changes = metric_fold_change_vs_control(metrics, metric=metric, control="P0-lux")
+                    fold_metric = f"{metric}_fold_change"
+                    figures.append((suffix, plot_metric_points(
+                        fold_changes, metric=fold_metric, y_scale=metric_scale,
+                        title=figure_label, group_by="Groupe")))
+                else:
+                    scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
+                    figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
+                        title=figure_label, compare_media=True)))
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
             uncertainty=uncertainty, title="Targeted control comparison"))

@@ -6,7 +6,7 @@ import pandas as pd
 from matplotlib.ticker import FuncFormatter
 
 from luxplate.plotting import (build_guided_raw_figures, build_publication_figures,
-                               plot_kinetics, plot_metric_points, plot_mixed_panels,
+                               metric_fold_change_vs_control, plot_kinetics, plot_metric_points, plot_mixed_panels,
                                plot_publication_panels)
 from test_workflow import workflow_table
 
@@ -381,6 +381,41 @@ def test_metric_gallery_uses_boxplots_and_includes_peak_time():
     for _, figure in figures:
         assert len(figure.axes[0].patches) == 2
         assert not any(text.get_text().startswith("mean =") for text in figure.axes[0].texts)
+        plt.close(figure)
+
+
+def test_fold_change_metrics_use_matched_p0_biological_mean_per_medium():
+    metrics = pd.DataFrame([
+        {"souche": strain, "Groupe": f"Experiment {experiment} | {medium}",
+         "experience_id": f"exp{experiment}", "replicat": 1,
+         "lum_norm_peak": control_value * ratio + technical}
+        for experiment, control_value in ((1, 10.0), (2, 20.0))
+        for medium in ("DMEM", "SCFM2")
+        for strain, ratio in (("P0-lux", 1.0), ("Reporter-lux", 3.0))
+        for technical in (0.0, 2.0)
+    ])
+
+    result = metric_fold_change_vs_control(metrics, metric="lum_norm_peak")
+
+    p0 = result.loc[result["souche"].eq("P0-lux"), "lum_norm_peak_fold_change"]
+    reporter = result.loc[result["souche"].eq("Reporter-lux"), "lum_norm_peak_fold_change"]
+    assert set(result["Groupe"]) == {"DMEM", "SCFM2"}
+    assert np.allclose(p0, 1)
+    assert np.allclose(sorted(reporter), sorted([31 / 11, 31 / 11, 61 / 21, 61 / 21]))
+
+
+def test_gallery_adds_peak_and_auc_fold_change_figures_by_medium():
+    figures = build_publication_figures(
+        _publication_table(), families=("peak_fc", "auc_fc"), metric_scale="linear"
+    )
+
+    assert [name for name, _ in figures] == [
+        "pic_luminescence_normalisee_fold_change_P0",
+        "auc_luminescence_normalisee_fold_change_P0",
+    ]
+    assert all("fold change vs P0" in figure.axes[0].get_ylabel() for _, figure in figures)
+    assert all(figure.axes[0].get_title() == "DMEM" for _, figure in figures)
+    for _, figure in figures:
         plt.close(figure)
 
 
