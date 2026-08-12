@@ -41,6 +41,7 @@ def cached_complete_analysis(
     consecutive_points: int,
     growth_window_points: int,
     growth_rate_min_r_squared: float,
+    _progress_callback=None,
 ):
     """Reuse a complete run when neither its data nor its settings changed."""
     return run_complete_analysis(
@@ -50,6 +51,7 @@ def cached_complete_analysis(
         consecutive_points=consecutive_points,
         growth_window_points=growth_window_points,
         growth_rate_min_r_squared=growth_rate_min_r_squared,
+        progress_callback=_progress_callback,
     )
 
 
@@ -135,6 +137,7 @@ with guided_tab:
         try:
             guided_inputs = []
             guided_identity = []
+            guided_import_progress = st.progress(0, text="Lecture des classeurs…")
             for file_index, upload in enumerate(guided_uploads):
                 payload = upload.getvalue()
                 _, lum_sheets = cached_workbook_sheets(payload)
@@ -142,7 +145,13 @@ with guided_tab:
                                    key=f"guided_lum_{file_index}_{upload.name}")
                 guided_inputs.append((upload.name, cached_kinetic_workbook(payload, lum)))
                 guided_identity.append((upload.name, hash(payload), lum))
+                guided_import_progress.progress(
+                    int((file_index + 1) / len(guided_uploads) * 90),
+                    text=f"Classeur {file_index + 1}/{len(guided_uploads)} lu",
+                )
             guided_data = combine_kinetic_tables(guided_inputs)
+            guided_import_progress.progress(100, text="Chargement terminé")
+            guided_import_progress.empty()
         except Exception as error:
             st.error(f"Import impossible : {error}")
         else:
@@ -262,13 +271,21 @@ with guided_tab:
                             [manual_decisions, bulk_decisions], ignore_index=True
                         ).drop_duplicates("decision_id")
                     try:
+                        analysis_progress = st.progress(0, text="Démarrage de l'analyse…")
                         complete = cached_complete_analysis(
                             guided_selected, manual_decisions, float(guided_min_od),
                             int(guided_consecutive), int(guided_window), float(guided_r2),
+                            _progress_callback=lambda percent, message: analysis_progress.progress(
+                                percent, text=message
+                            ),
                         )
+                        # A cache hit does not execute the callback, but should still
+                        # give immediate and unambiguous visual confirmation.
+                        analysis_progress.progress(100, text="Analyse terminée")
                     except ValueError as error:
                         st.error(f"Analyse impossible : {error}")
                     else:
+                        analysis_progress.empty()
                         st.session_state["guided_complete_result"] = complete
                         st.session_state["guided_decisions"] = manual_decisions
 
@@ -366,6 +383,7 @@ with import_tab:
     else:
         try:
             parsed, source_identity = [], []
+            import_progress = st.progress(0, text="Lecture des classeurs…")
             for file_index, upload in enumerate(uploads):
                 payload = upload.getvalue()
                 absorbance_sheet, luminescence_sheets = cached_workbook_sheets(payload)
@@ -374,7 +392,13 @@ with import_tab:
                     key=f"import_lum_{file_index}_{upload.name}")
                 parsed.append((upload.name, cached_kinetic_workbook(payload, selected_luminescence)))
                 source_identity.append((upload.name, hash(payload), selected_luminescence))
+                import_progress.progress(
+                    int((file_index + 1) / len(uploads) * 90),
+                    text=f"Classeur {file_index + 1}/{len(uploads)} lu",
+                )
             data = combine_kinetic_tables(parsed)
+            import_progress.progress(100, text="Chargement terminé")
+            import_progress.empty()
             previous_source = st.session_state.get("source_identity")
             if previous_source != source_identity:
                 for key in ("qc_journal", "validated_qc_journal", "qc_validated",
@@ -695,6 +719,7 @@ with figures_tab:
             if not selected_labels:
                 st.warning("Sélectionnez au moins une famille de figures.")
             else:
+                gallery_progress = st.progress(5, text="Création des figures…")
                 with st.spinner("Création des figures haute résolution…"):
                     figures = build_publication_figures(
                         st.session_state["normalization_result"].normalized_data,
@@ -705,8 +730,11 @@ with figures_tab:
                         uncertainty="bars" if uncertainty_label.startswith("Barres") else "ribbon",
                         control=control_strain,
                     )
+                    gallery_progress.progress(65, text="Encodage des formats d'export…")
                     rendered, archive = package_figures(figures, dpi=export_dpi)
+                    gallery_progress.progress(100, text="Galerie prête")
                     st.session_state["publication_export"] = (figures, rendered, archive, export_dpi)
+                gallery_progress.empty()
         if "publication_export" in st.session_state:
             # A session can survive a deployment/git pull.  Never reuse an export
             # produced by an older schema (which previously stored three items).

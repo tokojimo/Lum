@@ -59,6 +59,17 @@ def test_manual_whole_curve_decision_removes_every_series_point():
     assert set(result.kinetics.series_metrics["souche"]) == {"S1"}
 
 
+def test_complete_analysis_reports_each_calculation_stage():
+    updates = []
+    run_complete_analysis(
+        workflow_table(), consecutive_points=2, growth_window_points=2,
+        progress_callback=lambda percent, message: updates.append((percent, message)),
+    )
+
+    assert [percent for percent, _ in updates] == [5, 35, 70, 100]
+    assert updates[-1][1] == "Calcul des paramètres cinétiques terminé"
+
+
 def test_bulk_decisions_can_remove_first_time_from_every_blank_in_one_experiment():
     data = workflow_table().assign(experience="Expérience 2")
     decisions = build_bulk_point_decisions(
