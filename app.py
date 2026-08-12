@@ -120,12 +120,21 @@ def cached_publication_figures(
 
 
 def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tuple[str, str], ...]:
-    """Render a reference-first hypothesis picker without a quadratic pair list."""
+    """Render manual and automatic hypothesis builders backed by a persistent stack."""
     conditions = directional_condition_options(data)
     if len(conditions) < 2:
         st.info("Au moins deux boîtes sont nécessaires pour définir une comparaison.")
         return ()
 
+    stack_key = f"{key}_stack"
+    valid_ids = set(conditions.values())
+    stack = [tuple(pair) for pair in st.session_state.get(stack_key, [])
+             if len(pair) == 2 and pair[0] in valid_ids and pair[1] in valid_ids and pair[0] != pair[1]]
+    # Preserve insertion order while removing hypotheses added through more than one shortcut.
+    stack = list(dict.fromkeys(stack))
+    st.session_state[stack_key] = stack
+
+    st.markdown("**Ajout manuel**")
     columns = st.columns(2)
     reference_label = columns[0].selectbox(
         "Boîte de référence (A)", list(conditions), key=f"{key}_reference",
@@ -142,14 +151,71 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
         placeholder="Choisir une ou plusieurs boîtes",
         help="Un test A > B sera créé pour chaque boîte sélectionnée.",
     )
-    if selected:
-        st.caption(
-            f"{len(selected)} hypothèse{'s' if len(selected) > 1 else ''} : "
-            + " ; ".join(f"{reference_label} > {label}" for label in selected)
-        )
+    if st.button("Ajouter à la pile", key=f"{key}_add_manual", disabled=not selected):
+        additions = [(conditions[reference_label], conditions[label]) for label in selected]
+        st.session_state[stack_key] = list(dict.fromkeys([*stack, *additions]))
+        st.rerun()
+
+    st.markdown("**Ajouts automatiques**")
+    st.caption("Générez une série d'hypothèses, puis complétez-la avec les choix manuels ci-dessus.")
+    parsed = {internal: tuple(internal.split("\0", 1)) for internal in conditions.values()}
+    media = list(dict.fromkeys(medium for _, medium in parsed.values()))
+    controls = st.columns(2)
+    if len(media) >= 2:
+        medium_a = controls[0].selectbox("Milieu à gauche", media, key=f"{key}_medium_a")
+        medium_b_options = [medium for medium in media if medium != medium_a]
+        medium_b = controls[1].selectbox("Milieu à droite", medium_b_options, key=f"{key}_medium_b")
+        same_strain = []
+        strains = list(dict.fromkeys(strain for strain, _ in parsed.values()))
+        for strain in strains:
+            left, right = strain + "\0" + medium_a, strain + "\0" + medium_b
+            if left in valid_ids and right in valid_ids:
+                same_strain.append((left, right))
+        if st.button(
+            f"Toutes les souches : {medium_a} > {medium_b}", key=f"{key}_add_media",
+            disabled=not same_strain,
+        ):
+            st.session_state[stack_key] = list(dict.fromkeys([*stack, *same_strain]))
+            st.rerun()
     else:
-        st.caption("Aucune boîte B sélectionnée : aucun test ne sera effectué.")
-    return tuple((conditions[reference_label], conditions[label]) for label in selected)
+        st.info("Deux milieux sont nécessaires pour automatiser les comparaisons par souche.")
+
+    p0_strains = list(dict.fromkeys(
+        strain for strain, _ in parsed.values()
+        if "p0" in "".join(character for character in strain.casefold() if character.isalnum())
+    ))
+    if p0_strains:
+        control = st.selectbox("Contrôle", p0_strains, key=f"{key}_control")
+        versus_control = []
+        for left_id, (strain, medium) in parsed.items():
+            right_id = control + "\0" + medium
+            if strain != control and right_id in valid_ids:
+                versus_control.append((left_id, right_id))
+        if st.button(
+            f"Toutes les souches > {control} dans leur milieu", key=f"{key}_add_control",
+            disabled=not versus_control,
+        ):
+            st.session_state[stack_key] = list(dict.fromkeys([*stack, *versus_control]))
+            st.rerun()
+    else:
+        st.info("Aucune souche P0 détectée pour générer les comparaisons au contrôle.")
+
+    stack = st.session_state[stack_key]
+    labels_by_id = {internal: label for label, internal in conditions.items()}
+    st.markdown(f"**Pile — {len(stack)} hypothèse{'s' if len(stack) != 1 else ''}**")
+    if not stack:
+        st.caption("La pile est vide : aucun test ne sera effectué.")
+    else:
+        for index, (left, right) in enumerate(stack):
+            label_column, remove_column = st.columns([8, 1])
+            label_column.write(f"{index + 1}. {labels_by_id[left]} > {labels_by_id[right]}")
+            if remove_column.button("✕", key=f"{key}_remove_{index}", help="Retirer cette hypothèse"):
+                st.session_state[stack_key] = stack[:index] + stack[index + 1:]
+                st.rerun()
+        if st.button("Vider la pile", key=f"{key}_clear"):
+            st.session_state[stack_key] = []
+            st.rerun()
+    return tuple(stack)
 
 
 st.title("LuxPlate Analyzer")
