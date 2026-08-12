@@ -41,9 +41,13 @@ def cached_complete_analysis(
     consecutive_points: int,
     growth_window_points: int,
     growth_rate_min_r_squared: float,
-    _progress_callback=None,
 ):
-    """Reuse a complete run when neither its data nor its settings changed."""
+    """Reuse a complete run without caching Streamlit UI side effects.
+
+    Progress widgets must stay outside this cached function.  Otherwise
+    Streamlit records calls made through the callback and cannot replay them
+    when the progress widget belongs to a later script run.
+    """
     return run_complete_analysis(
         data,
         decisions,
@@ -51,7 +55,6 @@ def cached_complete_analysis(
         consecutive_points=consecutive_points,
         growth_window_points=growth_window_points,
         growth_rate_min_r_squared=growth_rate_min_r_squared,
-        progress_callback=_progress_callback,
     )
 
 
@@ -275,12 +278,10 @@ with guided_tab:
                         complete = cached_complete_analysis(
                             guided_selected, manual_decisions, float(guided_min_od),
                             int(guided_consecutive), int(guided_window), float(guided_r2),
-                            _progress_callback=lambda percent, message: analysis_progress.progress(
-                                percent, text=message
-                            ),
                         )
-                        # A cache hit does not execute the callback, but should still
-                        # give immediate and unambiguous visual confirmation.
+                        # Keep all progress-widget calls outside the cached function:
+                        # cached Streamlit effects cannot safely reference a layout
+                        # block created during another script run.
                         analysis_progress.progress(100, text="Analyse terminée")
                     except ValueError as error:
                         st.error(f"Analyse impossible : {error}")
