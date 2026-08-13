@@ -35,7 +35,7 @@ def _significance(p_value: float) -> str:
 
 def paired_directional_t_tests(
     biological: pd.DataFrame, *, value: str, condition: str = "souche",
-    identity: tuple[str, ...] = ("experience_id", "replicat", "Groupe"),
+    identity: tuple[str, ...] = ("experience_id", "experience", "biological_replicate_id"),
     comparisons: tuple[tuple[str, str], ...] = (),
 ) -> pd.DataFrame:
     """Test explicitly requested ``left > right`` hypotheses on log10 values.
@@ -103,5 +103,9 @@ def paired_directional_t_tests(
         adjusted.at[index] = running
     result["p_holm"] = adjusted
     result["holm_family_size"] = total
-    result["significance"] = result["p_holm"].map(_significance)
+    # Each explicitly selected contrast is a separately planned, pairwise
+    # hypothesis.  Keep Holm available in the exported audit table, but report
+    # the raw significance used by the figure rather than silently treating all
+    # simultaneously displayed brackets as one inferential family.
+    result["significance"] = result["p_raw"].map(_significance)
     return result[RESULT_COLUMNS]
