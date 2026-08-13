@@ -483,7 +483,7 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
 
 
 def _significance_stars(p_value: float) -> str:
-    """Return the conventional significance symbol for an adjusted p-value."""
+    """Return the conventional significance symbol for a p-value."""
     # A missing/uncomputable p-value is not evidence of non-significance.  In
     # particular, labelling NaN as ``ns`` hid failed or impossible tests.
     if not np.isfinite(p_value):
@@ -536,8 +536,14 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
         axis.plot(condition_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
                   marker="o", markersize=2.8, color=color, alpha=.32, zorder=2)
 
-    identity_columns = [column for column in ("experience_id", "replicat")
+    identity_columns = [column for column in ("experience_id", "experience")
                         if column in biological and biological[column].notna().any()]
+    if not identity_columns and "biological_replicate_id" in biological \
+            and biological["biological_replicate_id"].notna().any():
+        identity_columns = ["biological_replicate_id"]
+    if not identity_columns and "replicat" in biological \
+            and biological["replicat"].notna().any():
+        identity_columns = ["replicat"]
     identity_columns = identity_columns or (["Groupe"] if condition == "souche" else ["souche"])
     for identity in biological[identity_columns].drop_duplicates().itertuples(index=False, name=None):
         mask = np.ones(len(biological), dtype=bool)
@@ -600,13 +606,13 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     usable = comparisons.loc[comparisons["condition_1"].isin(positions)
                              & comparisons["condition_2"].isin(positions)]
     if significant_only:
-        usable = usable.loc[usable["p_holm"] < .05]
+        usable = usable.loc[usable["p_raw"] < .05]
     transform = blended_transform_factory(axis.transData, axis.transAxes)
     spacing = min(.055, .36 / max(1, len(usable)))
     for level, comparison in enumerate(usable.itertuples(index=False), start=1):
         left, right = positions[comparison.condition_1], positions[comparison.condition_2]
         y = .60 + spacing * level
-        p_label = _significance_stars(comparison.p_holm)
+        p_label = _significance_stars(comparison.p_raw)
         axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
                   transform=transform, color="#333333", lw=.7, clip_on=False)
         axis.text((left + right) / 2, y + .006, p_label, transform=transform,
@@ -638,8 +644,16 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         else:
             effective_scale = "linear"
 
-    biological_ids = [column for column in ("experience_id", "replicat")
+    # An imported workbook/run (``experience_id`` or legacy ``experience``) is
+    # the independent biological unit.  ``replicat`` identifies technical wells
+    # inside that run and is therefore averaged, not counted as biological N.
+    biological_ids = [column for column in ("experience_id", "experience")
                       if column in technical and technical[column].notna().any()]
+    if not biological_ids and "biological_replicate_id" in technical \
+            and technical["biological_replicate_id"].notna().any():
+        biological_ids = ["biological_replicate_id"]
+    if not biological_ids and "replicat" in technical and technical["replicat"].notna().any():
+        biological_ids = ["replicat"]
     group_columns = ["souche", "Groupe", *biological_ids]
     biological = technical.groupby(group_columns, dropna=False, sort=False)[metric].mean().reset_index()
     panels = ([None] if group_by is None else

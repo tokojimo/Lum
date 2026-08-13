@@ -262,7 +262,9 @@ def render_guided_results(complete, base: str) -> None:
                 "Summary boxplots show independent biological experiments and their exact mean; "
                 "small points are technical replicates and large points are biological means. "
                 "Les seules statistiques affichées sont les hypothèses sélectionnées : test t "
-                "apparié unilatéral sur log10 des moyennes biologiques, avec correction de Holm."
+                "apparié unilatéral sur log10 des moyennes biologiques. Chaque comparaison "
+                "planifiée 2 à 2 utilise sa p-value brute pour les étoiles ; la correction de "
+                "Holm reste disponible dans le tableau statistique exporté."
             )
     with result_tabs[4]:
         st.subheader("Exporter les résultats complets")

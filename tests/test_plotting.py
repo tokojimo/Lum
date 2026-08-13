@@ -423,6 +423,31 @@ def test_metric_points_only_draws_selected_directional_hypotheses():
     plt.close(selected)
 
 
+def test_metric_points_treats_legacy_experience_as_biological_unit():
+    metrics = pd.DataFrame([
+        {"souche": "PspeD2-1A", "Groupe": medium, "experience": f"Rep{experiment}",
+         "replicat": technical, "lum_norm_auc": value}
+        for experiment, without_spd, with_spd in (
+            (1, 1.243e8, 3.019e8), (2, 1.303e8, 2.033e8), (3, 1.101e8, 1.921e8)
+        )
+        for technical in (1, 2, 3)
+        for medium, value in (("SCFM2-KPi", without_spd),
+                              ("SCFM2-KPi (Spd)", with_spd))
+    ])
+    comparison = (("PspeD2-1A\0SCFM2-KPi (Spd)",
+                   "PspeD2-1A\0SCFM2-KPi"),)
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", compare_media=True,
+        directional_comparisons=comparison,
+    )
+
+    result = figure._luxplate_statistics.iloc[0]
+    assert result["pairing_columns"] == "experience"
+    assert result["n_pairs"] == 3
+    assert "*" in [text.get_text() for text in figure.axes[0].texts]
+    plt.close(figure)
+
+
 def test_gallery_can_select_curve_families():
     figures = build_publication_figures(
         _publication_table(), families=("growth", "mixed"), uncertainty="ribbon"
