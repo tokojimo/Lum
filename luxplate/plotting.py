@@ -940,6 +940,34 @@ def build_guided_corrected_figures(
     return figures
 
 
+def build_guided_crosstalk_figures(
+    data: pd.DataFrame, *, sample_type: str
+) -> list[tuple[str, object]]:
+    """Plot luminescence after cross-talk correction, before blank subtraction.
+
+    Keeping this intermediate signal visible is important because ``Lum_corr``
+    is subsequently centred using the mean blanks and therefore cannot be used
+    on its own to assess the optical cross-talk model.
+    """
+    if "RLU_corrected" not in data.columns:
+        raise ValueError("Colonne manquante pour la figure de cross-talk : RLU_corrected")
+
+    renamed = data.rename(columns={"Lum_brute": "_Lum_brute"}).rename(
+        columns={"RLU_corrected": "Lum_brute"}
+    )
+    figures = build_guided_raw_figures(renamed, sample_type=sample_type)
+    for _, figure in figures:
+        axes = np.asarray(figure.axes, dtype=object).reshape(-1, 2)
+        for row in range(axes.shape[0]):
+            axes[row, 1].set_ylabel(
+                axes[row, 1].get_ylabel().replace(
+                    "Luminescence brute (RLU)", "Luminescence après cross-talk (RLU)"
+                )
+            )
+        axes[0, 1].set_title("Luminescence après correction du cross-talk")
+    return figures
+
+
 def plot_qc_curves(data: pd.DataFrame, anomalies: pd.DataFrame):
     """Plot unmodified curves and overlay proposed anomalies as red crosses."""
     figure = plot_raw_curves(data)
