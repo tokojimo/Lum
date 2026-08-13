@@ -6,8 +6,9 @@ import pandas as pd
 import pytest
 from matplotlib.ticker import FuncFormatter
 
-from luxplate.plotting import (_aligned_biological_summary, build_guided_raw_figures,
-                               build_publication_figures, directional_condition_options,
+from luxplate.plotting import (_aligned_biological_summary, build_guided_corrected_figures,
+                               build_guided_raw_figures, build_publication_figures,
+                               directional_condition_options,
                                directional_comparison_options, metric_fold_change_vs_control,
                                plot_kinetics, plot_metric_points, plot_mixed_panels,
                                plot_publication_panels)
@@ -102,6 +103,20 @@ def test_guided_raw_figures_put_excel_experiments_on_rows_with_shared_scales():
         assert "Expérience 1" in figure.axes[0].get_ylabel()
         assert "Expérience 2" in figure.axes[2].get_ylabel()
         plt.close(figure)
+
+
+def test_guided_corrected_figures_plot_corrected_values_and_labels():
+    data = workflow_table().assign(DO_corr=0.25, Lum_corr=42.0)
+
+    figure = build_guided_corrected_figures(data, sample_type="souche")[0][1]
+
+    assert set(figure.axes[0].lines[0].get_ydata()) == {0.25}
+    assert set(figure.axes[1].lines[0].get_ydata()) == {42.0}
+    assert figure.axes[0].get_title() == "Densité optique corrigée"
+    assert figure.axes[1].get_title() == "Luminescence corrigée"
+    assert "corrigée" in figure.axes[0].get_ylabel()
+    assert "corrigée" in figure.axes[1].get_ylabel()
+    plt.close(figure)
 
 
 def _publication_table():

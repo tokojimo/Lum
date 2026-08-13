@@ -7,10 +7,11 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
+from luxplate.blanks import run_blank_correction
 from luxplate.crosstalk import correct_plate_crosstalk
 from luxplate.export import package_figures
-from luxplate.plotting import (build_guided_raw_figures, build_publication_figures,
-                               directional_condition_options)
+from luxplate.plotting import (build_guided_corrected_figures, build_guided_raw_figures,
+                               build_publication_figures, directional_condition_options)
 from luxplate.project import PROJECT_KEYS, export_project, import_project
 from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
 from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
@@ -60,6 +61,13 @@ def cached_complete_analysis(
 def cached_guided_raw_figures(data: pd.DataFrame, sample_type: str):
     """Build costly raw previews only once for each selection."""
     return build_guided_raw_figures(data, sample_type=sample_type)
+
+
+@st.cache_data(show_spinner="Préparation des courbes corrigées…", max_entries=12)
+def cached_guided_corrected_figures(data: pd.DataFrame, sample_type: str):
+    """Build blank-corrected previews only once for each selection."""
+    corrected = run_blank_correction(data).corrected_data
+    return build_guided_corrected_figures(corrected, sample_type=sample_type)
 
 
 @st.cache_data(show_spinner="Préparation des figures…", max_entries=12)
@@ -428,7 +436,10 @@ with guided_tab:
                         f"{guided_selected['sample_header'].nunique()} courbe(s) et "
                         f"{blanks['sample_header'].nunique()} blanc(s) détectés."
                     )
-                info_tabs = st.tabs(["Courbes des blancs", "Courbes des échantillons"])
+                info_tabs = st.tabs([
+                    "Courbes des blancs", "Courbes des échantillons",
+                    "Blancs corrigés", "Luminescence corrigée",
+                ])
                 with info_tabs[0]:
                     st.caption(
                         "Une ligne par expérience indépendante (réplicat biologique) ; les courbes d'une "
@@ -442,6 +453,25 @@ with guided_tab:
                         "et toutes ses courbes techniques. Les maxima OD600 et RLU sont communs aux lignes."
                     )
                     for _, figure in cached_guided_raw_figures(guided_selected, sample_type="souche"):
+                        st.pyplot(figure, use_container_width=True)
+                with info_tabs[2]:
+                    st.caption(
+                        "Courbes des blancs après soustraction, à chaque temps, de la moyenne des "
+                        "blancs du même milieu. Une courbe centrée autour de zéro est attendue."
+                    )
+                    for _, figure in cached_guided_corrected_figures(
+                        guided_selected, sample_type="blanc"
+                    ):
+                        st.pyplot(figure, use_container_width=True)
+                with info_tabs[3]:
+                    st.caption(
+                        "Courbes des échantillons après soustraction, à chaque temps, de la moyenne "
+                        "des blancs du même milieu. La densité optique corrigée est affichée à gauche "
+                        "et la luminescence corrigée à droite."
+                    )
+                    for _, figure in cached_guided_corrected_figures(
+                        guided_selected, sample_type="souche"
+                    ):
                         st.pyplot(figure, use_container_width=True)
 
                 st.subheader("Points et courbes à supprimer")
