@@ -7,6 +7,7 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
+from luxplate.crosstalk import correct_plate_crosstalk
 from luxplate.export import package_figures
 from luxplate.plotting import (build_guided_raw_figures, build_publication_figures,
                                directional_condition_options)
@@ -387,6 +388,17 @@ with guided_tab:
         except Exception as error:
             st.error(f"Import impossible : {error}")
         else:
+            guided_crosstalk = st.checkbox(
+                "Corriger le cross-talk de luminescence", value=False, key="guided_crosstalk",
+                help="Modèle linéaire à 8 voisins, fond instrumental de 24 RLU et coefficients fixes.",
+            )
+            if guided_crosstalk:
+                try:
+                    guided_data = correct_plate_crosstalk(guided_data)
+                except ValueError as error:
+                    st.error(f"Correction du cross-talk impossible : {error}")
+                    st.stop()
+                st.caption("Cross-talk corrigé : modèle 8 voisins · Fond : 24 RLU · coefficients directionnels fixes")
             strain_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "souche"].unique())
             medium_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "Groupe"].unique())
             guided_media = st.multiselect(
@@ -401,7 +413,7 @@ with guided_tab:
                 st.warning(str(error))
             else:
                 guided_signature = (
-                    tuple(guided_identity), tuple(guided_media), tuple(guided_strains),
+                    tuple(guided_identity), tuple(guided_media), tuple(guided_strains), guided_crosstalk,
                 )
                 if st.session_state.get("guided_signature") != guided_signature:
                     st.session_state.pop("guided_complete_result", None)

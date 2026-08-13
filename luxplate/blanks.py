@@ -118,12 +118,13 @@ def calculate_blank_profiles(data: pd.DataFrame) -> pd.DataFrame:
     ]
     if blanks.empty:
         return pd.DataFrame(columns=columns)
+    luminescence = "Lum_analysis" if "Lum_analysis" in blanks.columns else "Lum_brute"
     profiles = blanks.groupby(["Groupe", "temps_h"], dropna=False).agg(
         n_blancs=("DO_brute", "size"),
         DO_blanc_moyenne=("DO_brute", "mean"), DO_blanc_sd=("DO_brute", "std"),
         DO_blanc_min=("DO_brute", "min"), DO_blanc_max=("DO_brute", "max"),
-        Lum_blanc_moyenne=("Lum_brute", "mean"), Lum_blanc_sd=("Lum_brute", "std"),
-        Lum_blanc_min=("Lum_brute", "min"), Lum_blanc_max=("Lum_brute", "max"),
+        Lum_blanc_moyenne=(luminescence, "mean"), Lum_blanc_sd=(luminescence, "std"),
+        Lum_blanc_min=(luminescence, "min"), Lum_blanc_max=(luminescence, "max"),
     ).reset_index()
     return profiles[columns].sort_values(["Groupe", "temps_h"], kind="stable").reset_index(drop=True)
 
@@ -137,7 +138,8 @@ def correct_blanks(data: pd.DataFrame, blank_profiles: pd.DataFrame) -> tuple[pd
     observations = data.loc[data["type"].isin(["souche", "blanc"])].copy()
     corrected = observations.merge(blank_profiles, on=["Groupe", "temps_h"], how="left", validate="many_to_one")
     corrected["DO_corr"] = corrected["DO_brute"] - corrected["DO_blanc_moyenne"]
-    corrected["Lum_corr"] = corrected["Lum_brute"] - corrected["Lum_blanc_moyenne"]
+    luminescence = "Lum_analysis" if "Lum_analysis" in corrected.columns else "Lum_brute"
+    corrected["Lum_corr"] = corrected[luminescence] - corrected["Lum_blanc_moyenne"]
     missing = corrected.loc[
         corrected["type"].eq("souche")
         & corrected[["DO_blanc_moyenne", "Lum_blanc_moyenne"]].isna().any(axis=1),
