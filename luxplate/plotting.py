@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import textwrap
 from colorsys import hls_to_rgb
 from hashlib import sha256
 from itertools import combinations
@@ -81,6 +82,25 @@ def _display_panel(value: object) -> str:
     if match:
         return f"Experiment {match.group(1)} – {match.group(2).strip()}"
     return label.replace("|", " – ")
+
+
+def _wrapped_label(value: object, *, width: int = 32) -> str:
+    """Wrap long display labels at words so neighbouring panels stay distinct.
+
+    Matplotlib does not wrap axes titles to the physical width of an axes.  A
+    long culture-medium name consequently runs through the titles of adjacent
+    panels.  Explicit newlines are deterministic in screen, PNG, TIFF and SVG
+    exports, unlike renderer-dependent automatic wrapping.
+    """
+    label = str(value)
+    return "\n".join(textwrap.wrap(
+        label, width=width, break_long_words=False, break_on_hyphens=False,
+    )) or label
+
+
+def _panel_title(value: object, *, width: int = 32) -> str:
+    """Return a publication panel label constrained to a few readable lines."""
+    return _wrapped_label(_display_panel(value), width=width)
 
 
 def _medium_label(value: object) -> str:
@@ -299,9 +319,12 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         raise ValueError("No usable data available for the final figures.")
     strain_colors = _strain_colors(work)
     ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
+    panel_title_width = {1: 50, 2: 30, 3: 22}[ncols]
     header_columns, _ = _legend_layout(len(strain_colors))
     figure_width = max(4.1 * ncols, 2.15 * header_columns)
-    figure, axes = plt.subplots(nrows, ncols, figsize=(figure_width, 3.15 * nrows), squeeze=False)
+    # The extra vertical room accommodates wrapped medium titles without the
+    # preceding row's x label touching the next row's heading.
+    figure, axes = plt.subplots(nrows, ncols, figsize=(figure_width, 3.8 * nrows), squeeze=False)
     ylabel = {"DO_corr": r"OD$_{600}$",
               "Lum_corr": "Luminescence (RLU)",
               "Lum_norm": r"Normalized luminescence (RLU/OD$_{600}$)"}.get(value, value)
@@ -319,7 +342,8 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
             axis.errorbar(x, y, yerr=sd, color=color, lw=1.6, capsize=2,
                           linestyle=linestyle,
                           marker="o", markersize=2.5, label=strain)
-        axis.set(title=_display_panel(panel), xlabel="Time (h)", ylabel=ylabel)
+        axis.set(title=_panel_title(panel, width=panel_title_width),
+                 xlabel="Time (h)", ylabel=ylabel)
         axis.set_yscale(y_scale)
         if value == "Lum_corr" and y_scale == "linear":
             _scientific_rlu_axis(axis)
@@ -346,7 +370,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         for axis in visible_axes:
             axis.set_ylim(shared_limits)
         _set_common_time_end(visible_axes, work)
-    figure.subplots_adjust(top=axes_top, bottom=0.12, hspace=0.48, wspace=0.34)
+    figure.subplots_adjust(top=axes_top, bottom=0.12, hspace=0.82, wspace=0.34)
     return figure
 
 
@@ -378,9 +402,10 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
     strains_in_order = list(dict.fromkeys(work["souche"].dropna().astype(str)))
     strain_colors = _strain_colors(work)
     ncols = min(3, len(panels)); blocks = int(np.ceil(len(panels) / ncols))
+    panel_title_width = {1: 50, 2: 30, 3: 22}[ncols]
     header_columns, _ = _legend_layout(len(strains_in_order), extra_items=2)
     figure_width = max(4.5 * ncols, 2.15 * header_columns)
-    figure, axes = plt.subplots(blocks, ncols, figsize=(figure_width, 3.6 * blocks), squeeze=False)
+    figure, axes = plt.subplots(blocks, ncols, figsize=(figure_width, 4.2 * blocks), squeeze=False)
     legend_handles = []
     od_axes = []
     lum_axes = []
@@ -419,7 +444,7 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
             # the first Line2D; the figure-level legend consumes Line2D handles.
             od_line.set_label(str(strain))
             if panel_index == 0: legend_handles.append(od_line)
-        top.set(title=_display_panel(medium), ylabel=r"OD$_{600}$")
+        top.set(title=_panel_title(medium, width=panel_title_width), ylabel=r"OD$_{600}$")
         top.set(xlabel="Time (h)")
         lum_ylabel = ("Luminescence (RLU)" if lum_value == "Lum_corr" else
                       r"Normalized luminescence (RLU/OD$_{600}$)")
@@ -453,7 +478,7 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
                   frameon=False, loc="upper center", bbox_to_anchor=(.5, .92),
                   ncol=legend_columns)
     figure.suptitle(title or "Growth and luminescence", fontweight="bold", y=.995)
-    figure.subplots_adjust(top=axes_top, bottom=.13, hspace=.38, wspace=.52)
+    figure.subplots_adjust(top=axes_top, bottom=.13, hspace=.78, wspace=.52)
     return figure
 
 
@@ -538,9 +563,10 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
             display_conditions.append(_display_strain(item))
         elif condition == "_comparison":
             row = biological.loc[biological[condition].astype(str).eq(item)].iloc[0]
-            display_conditions.append(f"{_display_strain(row['_reporter'])}\n{row['_medium']}")
+            medium = _wrapped_label(row["_medium"], width=18)
+            display_conditions.append(f"{_display_strain(row['_reporter'])}\n{medium}")
         else:
-            display_conditions.append(_display_panel(item))
+            display_conditions.append(_panel_title(item))
     axis.set_xticks(range(len(conditions)), display_conditions)
     axis.set(xlabel="Reporter · medium" if condition == "_comparison" else
              ("Reporter" if condition == "souche" else "Medium"),
