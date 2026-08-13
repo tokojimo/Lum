@@ -29,17 +29,30 @@ PLATE_WELLS = tuple(f"{row}{column:02d}" for row in "ABCDEFGH" for column in ran
 _WELL_RE = re.compile(r"^[A-H](?:0[1-9]|1[0-2])$")
 
 
-def build_crosstalk_matrix() -> np.ndarray:
-    """Return A where ``A[target, source]`` is the fixed directional coefficient."""
+def _build_direction_matrices() -> dict[str, np.ndarray]:
+    """Return one adjacency matrix per source direction."""
     indices = {well: index for index, well in enumerate(PLATE_WELLS)}
-    matrix = np.zeros((96, 96), dtype=float)
+    matrices = {direction: np.zeros((96, 96), dtype=float)
+                for direction in _DIRECTION_OFFSETS}
     for target_index, target in enumerate(PLATE_WELLS):
         row, column = ord(target[0]) - ord("A"), int(target[1:]) - 1
         for direction, (row_offset, column_offset) in _DIRECTION_OFFSETS.items():
             source_row, source_column = row + row_offset, column + column_offset
             if 0 <= source_row < 8 and 0 <= source_column < 12:
                 source = f"{chr(ord('A') + source_row)}{source_column + 1:02d}"
-                matrix[target_index, indices[source]] = CROSSTALK_COEFFICIENTS[direction]
+                matrices[direction][target_index, indices[source]] = 1.0
+    for matrix in matrices.values():
+        matrix.setflags(write=False)
+    return matrices
+
+
+_DIRECTION_MATRICES = MappingProxyType(_build_direction_matrices())
+
+
+def build_crosstalk_matrix() -> np.ndarray:
+    """Return A where ``A[target, source]`` is the fixed directional coefficient."""
+    matrix = sum(CROSSTALK_COEFFICIENTS[direction] * direction_matrix
+                 for direction, direction_matrix in _DIRECTION_MATRICES.items())
     matrix.setflags(write=False)
     return matrix
 
@@ -50,20 +63,29 @@ CROSSTALK_MATRIX = build_crosstalk_matrix()
 def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
     """Add raw, predicted and corrected RLU columns without mutating ``data``.
 
-    Every experiment and time is treated as a separate optical plate. Each
+    Every experiment and reader acquisition is treated as a separate optical
+    plate when ``lecture`` is available; ``temps_h`` is the fallback key. Each
     such plate must contain exactly one finite measurement for every A01--H12
     well. Sources are always the simultaneous measured values minus the fixed
     instrumental background; corrected values are never fed back as sources.
     ``Lum_analysis`` is the explicit downstream signal used by blank correction.
     """
-    required = {"puits", "temps_h", "Lum_brute"}
+    required = {"puits", "Lum_brute"}
     missing = sorted(required.difference(data.columns))
+    if "lecture" not in data.columns and "temps_h" not in data.columns:
+        missing.append("lecture ou temps_h")
     if missing:
         raise ValueError("Colonnes manquantes pour le cross-talk : " + ", ".join(missing))
     if data.empty:
         raise ValueError("Le tableau de luminescence est vide.")
 
     output = data.copy(deep=True)
+    if "lecture" in output.columns:
+        lecture = pd.to_numeric(output["lecture"], errors="coerce")
+        if lecture.isna().any() or not np.isfinite(lecture).all():
+            raise ValueError(
+                "La colonne 'lecture' contient des valeurs manquantes ou invalides."
+            )
     output["puits"] = output["puits"].fillna("").astype(str).str.strip().str.upper()
     invalid = sorted(output.loc[~output["puits"].str.fullmatch(_WELL_RE), "puits"].unique())
     if invalid:
@@ -76,7 +98,8 @@ def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
     output["RLU_corrected"] = np.nan
 
     plate_keys = ["experience"] if "experience" in output.columns else []
-    group_keys = [*plate_keys, "temps_h"]
+    acquisition_key = "lecture" if "lecture" in output.columns else "temps_h"
+    group_keys = [*plate_keys, acquisition_key]
     grouper = group_keys[0] if len(group_keys) == 1 else group_keys
     expected = set(PLATE_WELLS)
     for key, plate in output.groupby(grouper, sort=False, dropna=False):
@@ -101,11 +124,10 @@ def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
         light = measured - INSTRUMENT_BACKGROUND_RLU
         contributions = {}
         for direction, coefficient in CROSSTALK_COEFFICIENTS.items():
-            directional = np.zeros(96, dtype=float)
-            coefficient_mask = CROSSTALK_MATRIX == coefficient
-            directional[:] = coefficient_mask @ light * coefficient
-            contributions[direction] = directional
-        predicted = CROSSTALK_MATRIX @ light
+            contributions[direction] = (
+                _DIRECTION_MATRICES[direction] @ light * coefficient
+            )
+        predicted = sum(contributions.values())
         corrected = light - predicted
         # Resolve output row numbers within this plate (experiments repeat well names).
         plate_rows = plate.reset_index(names="_output_row").set_index("puits")

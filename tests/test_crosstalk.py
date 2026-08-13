@@ -48,3 +48,46 @@ def test_incomplete_or_duplicate_plate_is_rejected():
     duplicated = pd.concat([plate(), plate().iloc[[0]]], ignore_index=True)
     with pytest.raises(ValueError, match="doublons=A01"):
         correct_plate_crosstalk(duplicated)
+
+
+def test_lecture_separates_acquisitions_with_the_same_rounded_time():
+    first = plate(source_value=24.0).assign(experience="exp", lecture=1)
+    second = plate(source_value=124.0).assign(experience="exp", lecture=2)
+    raw = pd.concat([first, second], ignore_index=True)
+
+    corrected = correct_plate_crosstalk(raw)
+
+    assert corrected.loc[corrected["lecture"].eq(1), "CrossTalk_predicted"].eq(0).all()
+    predicted_a06 = corrected.loc[
+        corrected["lecture"].eq(2) & corrected["puits"].eq("A06"),
+        "CrossTalk_predicted",
+    ].iloc[0]
+    assert predicted_a06 == pytest.approx(
+        CROSSTALK_COEFFICIENTS["S"] * (124.0 - INSTRUMENT_BACKGROUND_RLU)
+    )
+
+
+@pytest.mark.parametrize("invalid_lecture", [None, "", "not-a-number", np.inf])
+def test_invalid_lecture_is_rejected_before_plate_grouping(invalid_lecture):
+    raw = plate().assign(lecture=pd.Series([1] * len(PLATE_WELLS), dtype=object))
+    raw.loc[0, "lecture"] = invalid_lecture
+
+    with pytest.raises(ValueError, match="'lecture'.*manquantes ou invalides"):
+        correct_plate_crosstalk(raw)
+
+
+def test_directional_details_do_not_depend_on_unique_coefficient_values(monkeypatch):
+    import luxplate.crosstalk as crosstalk
+
+    coefficients = dict(CROSSTALK_COEFFICIENTS)
+    coefficients["S"] = coefficients["N"]
+    monkeypatch.setattr(crosstalk, "CROSSTALK_COEFFICIENTS", coefficients)
+    monkeypatch.setattr(crosstalk, "CROSSTALK_MATRIX", crosstalk.build_crosstalk_matrix())
+
+    corrected = crosstalk.correct_plate_crosstalk(plate()).set_index("puits")
+
+    light = 1_000_000.0 - INSTRUMENT_BACKGROUND_RLU
+    assert corrected.loc["A06", "CT_S"] == pytest.approx(coefficients["S"] * light)
+    assert corrected.loc["A06", "CT_N"] == 0
+    assert corrected.loc["C06", "CT_N"] == pytest.approx(coefficients["N"] * light)
+    assert corrected.loc["C06", "CT_S"] == 0
