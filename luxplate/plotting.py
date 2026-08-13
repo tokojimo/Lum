@@ -907,6 +907,39 @@ def build_guided_raw_figures(data: pd.DataFrame, *, sample_type: str) -> list[tu
     return figures
 
 
+def build_guided_corrected_figures(
+    data: pd.DataFrame, *, sample_type: str
+) -> list[tuple[str, object]]:
+    """Build guided figures from blank-corrected OD and luminescence values.
+
+    The layout matches the raw figures so each condition and biological
+    replicate can be compared directly between the raw and corrected tabs.
+    """
+    required = {"DO_corr", "Lum_corr"}
+    missing = required.difference(data.columns)
+    if missing:
+        raise ValueError(f"Colonnes manquantes pour la figure corrigée : {sorted(missing)}")
+
+    renamed = data.rename(columns={"DO_brute": "_DO_brute", "Lum_brute": "_Lum_brute"}).rename(
+        columns={"DO_corr": "DO_brute", "Lum_corr": "Lum_brute"}
+    )
+    figures = build_guided_raw_figures(renamed, sample_type=sample_type)
+    for _, figure in figures:
+        axes = np.asarray(figure.axes, dtype=object).reshape(-1, 2)
+        for row in range(axes.shape[0]):
+            axes[row, 0].set_ylabel(
+                axes[row, 0].get_ylabel().replace(r"OD$_{600}$ brute", r"OD$_{600}$ corrigée")
+            )
+            axes[row, 1].set_ylabel(
+                axes[row, 1].get_ylabel().replace(
+                    "Luminescence brute (RLU)", "Luminescence corrigée (RLU)"
+                )
+            )
+        axes[0, 0].set_title("Densité optique corrigée")
+        axes[0, 1].set_title("Luminescence corrigée")
+    return figures
+
+
 def plot_qc_curves(data: pd.DataFrame, anomalies: pd.DataFrame):
     """Plot unmodified curves and overlay proposed anomalies as red crosses."""
     figure = plot_raw_curves(data)
