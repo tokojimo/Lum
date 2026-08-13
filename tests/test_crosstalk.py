@@ -42,9 +42,18 @@ def test_correction_is_non_mutating_keeps_negative_values_and_separates_times():
                          "RLU_corrected"].iloc[0] < 0
 
 
-def test_incomplete_or_duplicate_plate_is_rejected():
-    with pytest.raises(ValueError, match="96 puits uniques"):
-        correct_plate_crosstalk(plate().iloc[:-1])
+def test_missing_wells_and_values_are_zero_signal_but_duplicates_are_rejected():
+    partial = plate().loc[lambda frame: ~frame["puits"].isin(["A01", "A02"])]
+    partial.loc[partial["puits"].eq("H12"), "Lum_brute"] = np.nan
+    corrected = correct_plate_crosstalk(partial)
+
+    assert len(corrected) == len(partial)
+    assert corrected["CrossTalk_predicted"].notna().all()
+    # A missing neighbour contributes no signal, rather than -24 RLU after
+    # subtraction of the instrumental background.
+    assert corrected.loc[corrected["puits"].eq("A03"), "CrossTalk_predicted"].iloc[0] == 0
+    assert corrected.loc[corrected["puits"].eq("H12"), "RLU_corrected"].iloc[0] == 0
+
     duplicated = pd.concat([plate(), plate().iloc[[0]]], ignore_index=True)
     with pytest.raises(ValueError, match="doublons=A01"):
         correct_plate_crosstalk(duplicated)
