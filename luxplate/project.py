@@ -30,6 +30,7 @@ PROJECT_KEYS = (
     # the workflow, without requiring the original workbooks again.
     "guided_signature", "guided_media", "guided_strains", "guided_min_od",
     "guided_consecutive", "guided_window", "guided_r2", "guided_figure_families",
+    "guided_crosstalk",
     "guided_figure_panels", "guided_figure_lum_scale", "guided_export_dpi",
     "guided_directional_comparisons_stack",
 )
