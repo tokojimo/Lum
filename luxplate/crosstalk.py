@@ -50,10 +50,11 @@ CROSSTALK_MATRIX = build_crosstalk_matrix()
 def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
     """Add raw, predicted and corrected RLU columns without mutating ``data``.
 
-    Every experiment and time is treated as a separate optical plate. Each
-    such plate must contain exactly one finite measurement for every A01--H12
-    well. Sources are always the simultaneous measured values minus the fixed
-    instrumental background; corrected values are never fed back as sources.
+    Every experiment and time is treated as a separate optical plate. Missing
+    wells and missing/non-numeric measurements are treated as zero optical
+    signal. Each well that is present must remain unique. Sources are always
+    the simultaneous measured values minus the fixed instrumental background;
+    corrected values are never fed back as sources.
     ``Lum_analysis`` is the explicit downstream signal used by blank correction.
     """
     required = {"puits", "temps_h", "Lum_brute"}
@@ -78,27 +79,22 @@ def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
     plate_keys = ["experience"] if "experience" in output.columns else []
     group_keys = [*plate_keys, "temps_h"]
     grouper = group_keys[0] if len(group_keys) == 1 else group_keys
-    expected = set(PLATE_WELLS)
     for key, plate in output.groupby(grouper, sort=False, dropna=False):
-        observed = set(plate["puits"])
         duplicates = sorted(plate.loc[plate["puits"].duplicated(keep=False), "puits"].unique())
-        missing_wells = sorted(expected - observed)
-        extra_wells = sorted(observed - expected)
-        if len(plate) != 96 or duplicates or missing_wells or extra_wells:
-            details = []
-            if missing_wells:
-                details.append("manquants=" + ",".join(missing_wells))
-            if duplicates:
-                details.append("doublons=" + ",".join(duplicates))
-            if extra_wells:
-                details.append("hors plaque=" + ",".join(extra_wells))
-            raise ValueError(f"Plaque incomplète au groupe {key!r}: 96 puits uniques requis ({'; '.join(details)}).")
-        ordered = plate.set_index("puits").loc[list(PLATE_WELLS)]
+        if duplicates:
+            raise ValueError(
+                f"Puits dupliqués au groupe {key!r} (doublons="
+                + ",".join(duplicates) + ")."
+            )
+
+        # A partial export commonly omits unused wells. They must not prevent
+        # correction, nor behave like a raw zero from which the instrumental
+        # background would be subtracted: an absent value contributes no light.
+        ordered = plate.set_index("puits").reindex(PLATE_WELLS)
         measured = ordered["RLU_raw"].to_numpy(dtype=float)
-        if not np.isfinite(measured).all():
-            bad = list(ordered.index[~np.isfinite(measured)])
-            raise ValueError(f"Luminescence absente/non numérique au groupe {key!r}: {', '.join(bad)}.")
-        light = measured - INSTRUMENT_BACKGROUND_RLU
+        present = np.isfinite(measured)
+        light = np.zeros(96, dtype=float)
+        light[present] = measured[present] - INSTRUMENT_BACKGROUND_RLU
         contributions = {}
         for direction, coefficient in CROSSTALK_COEFFICIENTS.items():
             directional = np.zeros(96, dtype=float)
@@ -109,11 +105,15 @@ def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
         corrected = light - predicted
         # Resolve output row numbers within this plate (experiments repeat well names).
         plate_rows = plate.reset_index(names="_output_row").set_index("puits")
-        row_indices = plate_rows.loc[list(PLATE_WELLS), "_output_row"].to_numpy()
+        present_wells = plate["puits"].tolist()
+        plate_positions = np.fromiter(
+            (PLATE_WELLS.index(well) for well in present_wells), dtype=int
+        )
+        row_indices = plate_rows.loc[present_wells, "_output_row"].to_numpy()
         for direction, values in contributions.items():
-            output.loc[row_indices, f"CT_{direction}"] = values
-        output.loc[row_indices, "CrossTalk_predicted"] = predicted
-        output.loc[row_indices, "RLU_corrected"] = corrected
+            output.loc[row_indices, f"CT_{direction}"] = values[plate_positions]
+        output.loc[row_indices, "CrossTalk_predicted"] = predicted[plate_positions]
+        output.loc[row_indices, "RLU_corrected"] = corrected[plate_positions]
 
     output["Lum_analysis"] = output["RLU_corrected"]
     return output
