@@ -10,7 +10,8 @@ import streamlit as st
 from luxplate.blanks import run_blank_correction
 from luxplate.crosstalk import correct_plate_crosstalk
 from luxplate.export import package_figures
-from luxplate.plotting import (build_guided_corrected_figures, build_guided_raw_figures,
+from luxplate.plotting import (build_guided_corrected_figures,
+                               build_guided_crosstalk_figures, build_guided_raw_figures,
                                build_publication_figures, directional_condition_options)
 from luxplate.project import PROJECT_KEYS, export_project, import_project
 from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
@@ -68,6 +69,12 @@ def cached_guided_corrected_figures(data: pd.DataFrame, sample_type: str):
     """Build blank-corrected previews only once for each selection."""
     corrected = run_blank_correction(data).corrected_data
     return build_guided_corrected_figures(corrected, sample_type=sample_type)
+
+
+@st.cache_data(show_spinner="Préparation des courbes après cross-talk…", max_entries=12)
+def cached_guided_crosstalk_figures(data: pd.DataFrame, sample_type: str):
+    """Build previews of the optical correction before blank subtraction."""
+    return build_guided_crosstalk_figures(data, sample_type=sample_type)
 
 
 @st.cache_data(show_spinner="Préparation des figures…", max_entries=12)
@@ -436,10 +443,11 @@ with guided_tab:
                         f"{guided_selected['sample_header'].nunique()} courbe(s) et "
                         f"{blanks['sample_header'].nunique()} blanc(s) détectés."
                     )
-                info_tabs = st.tabs([
-                    "Courbes des blancs", "Courbes des échantillons",
-                    "Blancs corrigés", "Luminescence corrigée",
-                ])
+                tab_names = ["Courbes des blancs", "Courbes des échantillons"]
+                if guided_crosstalk:
+                    tab_names.append("Après correction du cross-talk")
+                tab_names.extend(["Blancs corrigés", "Luminescence corrigée"])
+                info_tabs = st.tabs(tab_names)
                 with info_tabs[0]:
                     st.caption(
                         "Une ligne par expérience indépendante (réplicat biologique) ; les courbes d'une "
@@ -454,7 +462,19 @@ with guided_tab:
                     )
                     for _, figure in cached_guided_raw_figures(guided_selected, sample_type="souche"):
                         st.pyplot(figure, use_container_width=True)
-                with info_tabs[2]:
+                next_tab = 2
+                if guided_crosstalk:
+                    with info_tabs[next_tab]:
+                        st.caption(
+                            "Luminescence après correction du cross-talk et avant soustraction "
+                            "des blancs. Cette vue permet d'évaluer directement le modèle optique."
+                        )
+                        for _, figure in cached_guided_crosstalk_figures(
+                            guided_selected, sample_type="blanc"
+                        ):
+                            st.pyplot(figure, use_container_width=True)
+                    next_tab += 1
+                with info_tabs[next_tab]:
                     st.caption(
                         "Courbes des blancs après soustraction, à chaque temps, de la moyenne des "
                         "blancs du même milieu. Une courbe centrée autour de zéro est attendue."
@@ -463,7 +483,7 @@ with guided_tab:
                         guided_selected, sample_type="blanc"
                     ):
                         st.pyplot(figure, use_container_width=True)
-                with info_tabs[3]:
+                with info_tabs[next_tab + 1]:
                     st.caption(
                         "Courbes des échantillons après soustraction, à chaque temps, de la moyenne "
                         "des blancs du même milieu. La densité optique corrigée est affichée à gauche "

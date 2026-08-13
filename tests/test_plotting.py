@@ -7,7 +7,8 @@ import pytest
 from matplotlib.ticker import FuncFormatter
 
 from luxplate.plotting import (_aligned_biological_summary, build_guided_corrected_figures,
-                               build_guided_raw_figures, build_publication_figures,
+                               build_guided_crosstalk_figures, build_guided_raw_figures,
+                               build_publication_figures,
                                directional_condition_options,
                                directional_comparison_options, metric_fold_change_vs_control,
                                plot_kinetics, plot_metric_points, plot_mixed_panels,
@@ -116,6 +117,17 @@ def test_guided_corrected_figures_plot_corrected_values_and_labels():
     assert figure.axes[1].get_title() == "Luminescence corrigée"
     assert "corrigée" in figure.axes[0].get_ylabel()
     assert "corrigée" in figure.axes[1].get_ylabel()
+    plt.close(figure)
+
+
+def test_guided_crosstalk_figures_show_intermediate_signal_and_label():
+    data = workflow_table().assign(RLU_corrected=-123.0)
+
+    figure = build_guided_crosstalk_figures(data, sample_type="blanc")[0][1]
+
+    assert set(figure.axes[1].lines[0].get_ydata()) == {-123.0}
+    assert figure.axes[1].get_title() == "Luminescence après correction du cross-talk"
+    assert "après cross-talk" in figure.axes[1].get_ylabel()
     plt.close(figure)
 
 
