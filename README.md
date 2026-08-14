@@ -107,13 +107,13 @@ After an explicitly validated blank association, normalization is
 valid points. These parameters will remain visible and configurable. Missing
 values are never replaced by zero.
 
-The Dbest cross-talk correction accepts partially read plates only when every
-absent position is explicitly declared as `water`, `eau`, or
-`non_luminescent` through `unmeasured_well_statuses`. It solves the principal
-submatrix for the measured wells, in canonical A01–H12 order, under the
-scientific assumption that the absent wells' true source signal is zero. An
-absent well with unknown content stops correction, and LuxPlate never turns a
-missing raw reading into zero (or into `-background`).
+The Dbest cross-talk correction accepts partially read plates and treats every
+absent position as non-luminescent. It solves the principal submatrix for the
+measured wells, in canonical A01–H12 order, under the scientific assumption
+that the absent wells' true source signal is zero. Optional `water`, `eau`, or
+`non_luminescent` metadata can still be supplied through
+`unmeasured_well_statuses`. LuxPlate never turns a missing raw reading on a
+present row into zero (or into `-background`).
 
 Kinetic series use every available identity component among `experience_id`,
 `souche`, `Groupe`, `sample_header`, `puits`, and `replicat`, so conditions,
@@ -246,10 +246,11 @@ Raw Varioskan
 Le kernel `MAURI_E06_BEST` est calibré **en dehors de LuxPlate**, puis figé et
 versionné. LuxPlate ne l'ajuste et ne le réentraîne jamais sur une plaque
 analysée : il charge directement `kernel_D_best.npy` et le `background_rlu` de
-`02_background_estimate.json`, puis applique simultanément aux 96 puits
-`R = solve(Dbest, L - b)`. Une plaque A01–H12 complète est donc obligatoire à
-chaque temps et pour chaque expérience. Les valeurs corrigées négatives sont
-conservées sans troncature.
+`02_background_estimate.json`, puis applique `R = solve(Dbest, L - b)`. Pour
+une lecture partielle, les puits absents sont considérés non luminescents et la
+résolution utilise le sous-kernel principal des seuls puits mesurés, dans
+l'ordre canonique A01–H12. Les valeurs corrigées négatives sont conservées sans
+troncature.
 
 Le background optique E06 fait partie du modèle de cross-talk et intervient
 avant Dbest. Il est distinct des blancs expérimentaux du milieu, qui restent
