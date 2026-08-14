@@ -12,4 +12,7 @@ license = {text = "MIT"}
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+pythonpath = ["."]
 
+[tool.setuptools.package-data]
+luxplate = ["resources/crosstalk/MAURI_E06_BEST/*"]

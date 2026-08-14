@@ -406,8 +406,10 @@ with guided_tab:
             st.error(f"Import impossible : {error}")
         else:
             guided_crosstalk = st.checkbox(
-                "Corriger le cross-talk de luminescence", value=False, key="guided_crosstalk",
-                help="Modèle linéaire à 8 voisins, fond instrumental de 24 RLU et coefficients fixes.",
+                "Corriger le cross-talk de luminescence — Mauri Dbest", value=False,
+                key="guided_crosstalk",
+                help=("Déconvolution matricielle 96×96 utilisant le kernel Dbest calibré "
+                      "sur une plaque mono-source E06."),
             )
             if guided_crosstalk:
                 try:
@@ -415,7 +417,7 @@ with guided_tab:
                 except ValueError as error:
                     st.error(f"Correction du cross-talk impossible : {error}")
                     st.stop()
-                st.caption("Cross-talk corrigé : modèle 8 voisins · Fond : 24 RLU · coefficients directionnels fixes")
+                st.caption("Cross-talk corrigé avec MAURI_E06_BEST.")
             strain_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "souche"].unique())
             medium_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "Groupe"].unique())
             guided_media = st.multiselect(

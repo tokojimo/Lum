@@ -219,3 +219,31 @@ experimental data or silently change legacy behavior.
 ## License
 
 LuxPlate Analyzer is available under the [MIT License](LICENSE).
+
+## Correction optique Mauri E06 Dbest
+
+Le workflow scientifique officiel est :
+
+```
+Raw Varioskan
+  → background optique de calibration E06
+  → déconvolution Mauri E06 Dbest
+  → correction des blancs expérimentaux
+  → normalisation DO/luminescence
+  → cinétiques
+  → statistiques
+  → figures et exports
+```
+
+Le kernel `MAURI_E06_BEST` est calibré **en dehors de LuxPlate**, puis figé et
+versionné. LuxPlate ne l'ajuste et ne le réentraîne jamais sur une plaque
+analysée : il charge directement `kernel_D_best.npy` et le `background_rlu` de
+`02_background_estimate.json`, puis applique simultanément aux 96 puits
+`R = solve(Dbest, L - b)`. Une plaque A01–H12 complète est donc obligatoire à
+chaque temps et pour chaque expérience. Les valeurs corrigées négatives sont
+conservées sans troncature.
+
+Le background optique E06 fait partie du modèle de cross-talk et intervient
+avant Dbest. Il est distinct des blancs expérimentaux du milieu, qui restent
+calculés ensuite à partir de `Lum_analysis`, avant la normalisation et les
+analyses cinétiques.
