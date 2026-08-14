@@ -1,61 +1,90 @@
-"""Fixed, non-iterative optical cross-talk correction for 96-well plates."""
+"""Application of the frozen Mauri E06 Dbest optical cross-talk model."""
 
 from __future__ import annotations
 
-from types import MappingProxyType
+from dataclasses import dataclass
+from importlib.resources import as_file, files
+import json
+import math
 import re
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 
-INSTRUMENT_BACKGROUND_RLU = 24.0
-# Direction means the position of the source relative to the target well.
-CROSSTALK_COEFFICIENTS = MappingProxyType({
-    "N": 0.013177,
-    "S": 0.009386,
-    "E": 0.014344,
-    "O": 0.012281,
-    "NE": 0.002256,
-    "NO": 0.001075,
-    "SE": 0.000874,
-    "SO": 0.001521,
-})
-_DIRECTION_OFFSETS = MappingProxyType({
-    "N": (-1, 0), "S": (1, 0), "E": (0, 1), "O": (0, -1),
-    "NE": (-1, 1), "NO": (-1, -1), "SE": (1, 1), "SO": (1, -1),
-})
-PLATE_WELLS = tuple(f"{row}{column:02d}" for row in "ABCDEFGH" for column in range(1, 13))
+KERNEL_ID = "MAURI_E06_BEST"
+MODEL_RESOURCE = files("luxplate").joinpath("resources", "crosstalk", KERNEL_ID)
+PLATE_WELLS = tuple(
+    f"{row}{column:02d}" for row in "ABCDEFGH" for column in range(1, 13)
+)
 _WELL_RE = re.compile(r"^[A-H](?:0[1-9]|1[0-2])$")
+_INCOMPLETE_PLATE = (
+    "Correction Dbest impossible : les 96 puits A01–H12 sont requis pour chaque temps."
+)
 
 
-def build_crosstalk_matrix() -> np.ndarray:
-    """Return A where ``A[target, source]`` is the fixed directional coefficient."""
-    indices = {well: index for index, well in enumerate(PLATE_WELLS)}
-    matrix = np.zeros((96, 96), dtype=float)
-    for target_index, target in enumerate(PLATE_WELLS):
-        row, column = ord(target[0]) - ord("A"), int(target[1:]) - 1
-        for direction, (row_offset, column_offset) in _DIRECTION_OFFSETS.items():
-            source_row, source_column = row + row_offset, column + column_offset
-            if 0 <= source_row < 8 and 0 <= source_column < 12:
-                source = f"{chr(ord('A') + source_row)}{source_column + 1:02d}"
-                matrix[target_index, indices[source]] = CROSSTALK_COEFFICIENTS[direction]
-    matrix.setflags(write=False)
-    return matrix
+@dataclass(frozen=True)
+class CrosstalkModel:
+    """Validated, immutable view of the packaged calibration artifacts."""
+
+    Dbest: np.ndarray
+    background_rlu: float
+    metadata: dict[str, Any]
+    condition_number: float
 
 
-CROSSTALK_MATRIX = build_crosstalk_matrix()
+def load_crosstalk_model() -> CrosstalkModel:
+    """Load and validate the exact packaged Dbest calibration artifacts."""
+    try:
+        with MODEL_RESOURCE.joinpath("02_background_estimate.json").open(
+            "r", encoding="utf-8"
+        ) as stream:
+            background_data = json.load(stream)
+        with MODEL_RESOURCE.joinpath("kernel_metadata.json").open(
+            "r", encoding="utf-8"
+        ) as stream:
+            metadata = json.load(stream)
+        with as_file(MODEL_RESOURCE.joinpath("kernel_D_best.npy")) as kernel_path:
+            kernel = np.load(kernel_path, allow_pickle=False)
+    except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError, KeyError) as error:
+        raise RuntimeError(f"Artefacts Dbest absents ou illisibles : {error}") from error
+
+    if metadata.get("kernel_id") != KERNEL_ID:
+        raise RuntimeError(
+            f"Kernel Dbest invalide : kernel_id={metadata.get('kernel_id')!r}, "
+            f"attendu={KERNEL_ID!r}."
+        )
+    if kernel.shape != (96, 96):
+        raise RuntimeError(f"Kernel Dbest invalide : forme {kernel.shape}, attendue (96, 96).")
+    if not np.issubdtype(kernel.dtype, np.number) or not np.isfinite(kernel).all():
+        raise RuntimeError("Kernel Dbest invalide : toutes les valeurs doivent être numériques et finies.")
+
+    background = background_data.get("background_rlu")
+    if isinstance(background, bool) or not isinstance(background, (int, float)):
+        raise RuntimeError("Background Dbest invalide : background_rlu doit être numérique.")
+    background = float(background)
+    if not math.isfinite(background):
+        raise RuntimeError("Background Dbest invalide : background_rlu doit être fini.")
+
+    kernel = np.asarray(kernel, dtype=float)
+    try:
+        # A solve against zero validates that the matrix is square and non-singular.
+        np.linalg.solve(kernel, np.zeros(96, dtype=float))
+        condition_number = float(np.linalg.cond(kernel))
+    except np.linalg.LinAlgError as error:
+        raise RuntimeError("Kernel Dbest inutilisable par np.linalg.solve.") from error
+    if not math.isfinite(condition_number):
+        raise RuntimeError("Kernel Dbest invalide : condition number non fini.")
+    kernel.setflags(write=False)
+    return CrosstalkModel(kernel, background, metadata, condition_number)
 
 
 def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
-    """Add raw, predicted and corrected RLU columns without mutating ``data``.
+    """Apply ``solve(Dbest, Lum_brute - background_rlu)`` to complete plates.
 
-    Every experiment and time is treated as a separate optical plate. Missing
-    wells and missing/non-numeric measurements are treated as zero optical
-    signal. Each well that is present must remain unique. Sources are always
-    the simultaneous measured values minus the fixed instrumental background;
-    corrected values are never fed back as sources.
-    ``Lum_analysis`` is the explicit downstream signal used by blank correction.
+    Each experiment/time group is solved independently in canonical A01–H12
+    order. The input is never mutated and negative deconvolved values are kept.
     """
     required = {"puits", "temps_h", "Lum_brute"}
     missing = sorted(required.difference(data.columns))
@@ -64,56 +93,59 @@ def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
     if data.empty:
         raise ValueError("Le tableau de luminescence est vide.")
 
+    model = load_crosstalk_model()
     output = data.copy(deep=True)
-    output["puits"] = output["puits"].fillna("").astype(str).str.strip().str.upper()
-    invalid = sorted(output.loc[~output["puits"].str.fullmatch(_WELL_RE), "puits"].unique())
+    output["_crosstalk_row_position"] = np.arange(len(output))
+    wells = output["puits"].fillna("").astype(str).str.strip().str.upper()
+    invalid = sorted(wells.loc[~wells.str.fullmatch(_WELL_RE)].unique())
     if invalid:
-        raise ValueError("Positions de puits invalides (format attendu A01 à H12) : " + ", ".join(invalid))
+        raise ValueError(
+            "Positions de puits invalides (format attendu A01 à H12) : " + ", ".join(invalid)
+        )
+    output["puits"] = wells
     output["RLU_raw"] = pd.to_numeric(output["Lum_brute"], errors="coerce")
-    output["Instrument_background_RLU"] = INSTRUMENT_BACKGROUND_RLU
-    for direction in CROSSTALK_COEFFICIENTS:
-        output[f"CT_{direction}"] = np.nan
-    output["CrossTalk_predicted"] = np.nan
-    output["RLU_corrected"] = np.nan
 
-    plate_keys = ["experience"] if "experience" in output.columns else []
-    group_keys = [*plate_keys, "temps_h"]
+    result_columns = (
+        "RLU_background_subtracted", "RLU_corrected", "RLU_correction_delta",
+        "Lum_analysis", "max_abs_reconstruction_residual", "RMSE_reconstruction",
+    )
+    for column in result_columns:
+        output[column] = np.nan
+    output["crosstalk_method"] = "MAURI_DBEST"
+    output["crosstalk_kernel_id"] = model.metadata["kernel_id"]
+    output["crosstalk_condition_number"] = model.condition_number
+
+    group_keys = (["experience"] if "experience" in output.columns else []) + ["temps_h"]
     grouper = group_keys[0] if len(group_keys) == 1 else group_keys
     for key, plate in output.groupby(grouper, sort=False, dropna=False):
         duplicates = sorted(plate.loc[plate["puits"].duplicated(keep=False), "puits"].unique())
         if duplicates:
-            raise ValueError(
-                f"Puits dupliqués au groupe {key!r} (doublons="
-                + ",".join(duplicates) + ")."
-            )
+            raise ValueError(f"Correction Dbest impossible : puits dupliqués au groupe {key!r}: " + ", ".join(duplicates))
+        if len(plate) != 96 or set(plate["puits"]) != set(PLATE_WELLS):
+            raise ValueError(_INCOMPLETE_PLATE)
+        if plate["RLU_raw"].isna().any() or not np.isfinite(plate["RLU_raw"].to_numpy()).all():
+            raise ValueError(f"Correction Dbest impossible : Lum_brute manquante ou non numérique au groupe {key!r}.")
 
-        # A partial export commonly omits unused wells. They must not prevent
-        # correction, nor behave like a raw zero from which the instrumental
-        # background would be subtracted: an absent value contributes no light.
-        ordered = plate.set_index("puits").reindex(PLATE_WELLS)
-        measured = ordered["RLU_raw"].to_numpy(dtype=float)
-        present = np.isfinite(measured)
-        light = np.zeros(96, dtype=float)
-        light[present] = measured[present] - INSTRUMENT_BACKGROUND_RLU
-        contributions = {}
-        for direction, coefficient in CROSSTALK_COEFFICIENTS.items():
-            directional = np.zeros(96, dtype=float)
-            coefficient_mask = CROSSTALK_MATRIX == coefficient
-            directional[:] = coefficient_mask @ light * coefficient
-            contributions[direction] = directional
-        predicted = CROSSTALK_MATRIX @ light
-        corrected = light - predicted
-        # Resolve output row numbers within this plate (experiments repeat well names).
-        plate_rows = plate.reset_index(names="_output_row").set_index("puits")
-        present_wells = plate["puits"].tolist()
-        plate_positions = np.fromiter(
-            (PLATE_WELLS.index(well) for well in present_wells), dtype=int
-        )
-        row_indices = plate_rows.loc[present_wells, "_output_row"].to_numpy()
-        for direction, values in contributions.items():
-            output.loc[row_indices, f"CT_{direction}"] = values[plate_positions]
-        output.loc[row_indices, "CrossTalk_predicted"] = predicted[plate_positions]
-        output.loc[row_indices, "RLU_corrected"] = corrected[plate_positions]
+        ordered = plate.set_index("puits").loc[list(PLATE_WELLS)]
+        raw = ordered["RLU_raw"].to_numpy(dtype=float)
+        optical = raw - model.background_rlu
+        corrected = np.linalg.solve(model.Dbest, optical)
+        residual = optical - model.Dbest @ corrected
+        max_residual = float(np.max(np.abs(residual)))
+        rmse = float(np.sqrt(np.mean(np.square(residual))))
 
-    output["Lum_analysis"] = output["RLU_corrected"]
-    return output
+        values = pd.DataFrame({
+            "RLU_background_subtracted": optical,
+            "RLU_corrected": corrected,
+            "RLU_correction_delta": optical - corrected,
+            "Lum_analysis": corrected,
+        }, index=PLATE_WELLS)
+        result_positions = [output.columns.get_loc(column) for column in values.columns]
+        for _, row in plate.iterrows():
+            position = int(row["_crosstalk_row_position"])
+            output.iloc[position, result_positions] = values.loc[row["puits"]].to_numpy()
+        positions = plate["_crosstalk_row_position"].to_numpy(dtype=int)
+        output.iloc[positions, output.columns.get_loc("max_abs_reconstruction_residual")] = max_residual
+        output.iloc[positions, output.columns.get_loc("RMSE_reconstruction")] = rmse
+
+    return output.drop(columns="_crosstalk_row_position")

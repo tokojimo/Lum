@@ -1,59 +1,112 @@
 import numpy as np
 import pandas as pd
+import pandas.testing as pdt
 import pytest
 
-from luxplate.crosstalk import (CROSSTALK_COEFFICIENTS, INSTRUMENT_BACKGROUND_RLU,
-                                PLATE_WELLS, correct_plate_crosstalk)
+from luxplate.blanks import run_blank_correction
+from luxplate.crosstalk import (
+    MODEL_RESOURCE,
+    PLATE_WELLS,
+    correct_plate_crosstalk,
+    load_crosstalk_model,
+)
 
 
-def plate(source_well="B06", source_value=1_000_000.0):
+def plate(signal, *, time=0.0, experience="exp-1"):
+    model = load_crosstalk_model()
+    raw = model.Dbest @ np.asarray(signal, dtype=float) + model.background_rlu
     return pd.DataFrame({
-        "puits": PLATE_WELLS,
-        "temps_h": 0.0,
-        "Lum_brute": [source_value if well == source_well else INSTRUMENT_BACKGROUND_RLU
-                      for well in PLATE_WELLS],
+        "experience": experience, "temps_h": time, "puits": PLATE_WELLS,
+        "Lum_brute": raw, "DO_brute": 1.0, "Groupe": "medium",
+        "type": ["blanc"] * 2 + ["souche"] * 94,
+        "souche": ["blank"] * 2 + ["strain"] * 94,
+        "replicat": range(96), "sample_header": [f"sample-{i}" for i in range(96)],
     })
 
 
-def test_single_source_uses_source_relative_direction_and_only_adjacent_wells():
-    raw = plate()
-    corrected = correct_plate_crosstalk(raw)
-    light = 1_000_000.0 - INSTRUMENT_BACKGROUND_RLU
-    predicted = corrected.set_index("puits")["CrossTalk_predicted"]
-    assert predicted["A06"] == pytest.approx(CROSSTALK_COEFFICIENTS["S"] * light)
-    assert predicted["C06"] == pytest.approx(CROSSTALK_COEFFICIENTS["N"] * light)
-    assert predicted["B05"] == pytest.approx(CROSSTALK_COEFFICIENTS["E"] * light)
-    assert predicted["B07"] == pytest.approx(CROSSTALK_COEFFICIENTS["O"] * light)
-    assert predicted["A05"] == pytest.approx(CROSSTALK_COEFFICIENTS["SE"] * light)
-    assert predicted["A07"] == pytest.approx(CROSSTALK_COEFFICIENTS["SO"] * light)
-    assert predicted["C05"] == pytest.approx(CROSSTALK_COEFFICIENTS["NE"] * light)
-    assert predicted["C07"] == pytest.approx(CROSSTALK_COEFFICIENTS["NO"] * light)
-    assert np.count_nonzero(predicted.to_numpy()) == 8
+def corrected_in_plate_order(result):
+    return result.set_index("puits").loc[list(PLATE_WELLS), "RLU_corrected"].to_numpy()
 
 
-def test_correction_is_non_mutating_keeps_negative_values_and_separates_times():
-    raw = pd.concat([plate(source_value=24.0), plate(source_value=124.0).assign(temps_h=1.0)], ignore_index=True)
-    snapshot = raw.copy(deep=True)
-    corrected = correct_plate_crosstalk(raw)
-    pd.testing.assert_frame_equal(raw, snapshot)
-    assert "RLU_corrected" not in raw
-    assert corrected.loc[corrected["temps_h"].eq(0), "CrossTalk_predicted"].eq(0).all()
-    assert corrected.loc[(corrected["temps_h"].eq(1)) & (corrected["puits"].eq("A06")),
-                         "RLU_corrected"].iloc[0] < 0
+def test_artifacts_load_as_official_kernel():
+    assert MODEL_RESOURCE.joinpath("kernel_D_best.npy").is_file()
+    assert not MODEL_RESOURCE.joinpath("kernel_D.npy").is_file()
+    model = load_crosstalk_model()
+    assert model.Dbest.shape == (96, 96)
+    assert model.metadata["kernel_id"] == "MAURI_E06_BEST"
+    assert np.isfinite(model.condition_number)
 
 
-def test_missing_wells_and_values_are_zero_signal_but_duplicates_are_rejected():
-    partial = plate().loc[lambda frame: ~frame["puits"].isin(["A01", "A02"])]
-    partial.loc[partial["puits"].eq("H12"), "Lum_brute"] = np.nan
-    corrected = correct_plate_crosstalk(partial)
+def test_canonical_well_order():
+    assert PLATE_WELLS == tuple(f"{row}{col:02d}" for row in "ABCDEFGH" for col in range(1, 13))
 
-    assert len(corrected) == len(partial)
-    assert corrected["CrossTalk_predicted"].notna().all()
-    # A missing neighbour contributes no signal, rather than -24 RLU after
-    # subtraction of the instrumental background.
-    assert corrected.loc[corrected["puits"].eq("A03"), "CrossTalk_predicted"].iloc[0] == 0
-    assert corrected.loc[corrected["puits"].eq("H12"), "RLU_corrected"].iloc[0] == 0
 
-    duplicated = pd.concat([plate(), plate().iloc[[0]]], ignore_index=True)
-    with pytest.raises(ValueError, match="doublons=A01"):
-        correct_plate_crosstalk(duplicated)
+def test_synthetic_mathematical_identity_and_output_traceability():
+    truth = np.linspace(1.0, 100_000.0, 96)
+    raw = plate(truth).sample(frac=1, random_state=42)
+    result = correct_plate_crosstalk(raw)
+    np.testing.assert_allclose(corrected_in_plate_order(result), truth, rtol=2e-12, atol=2e-10)
+    assert np.array_equal(result["RLU_raw"], result["Lum_brute"])
+    assert np.array_equal(result["Lum_analysis"], result["RLU_corrected"])
+    assert result["crosstalk_method"].eq("MAURI_DBEST").all()
+    assert result["crosstalk_kernel_id"].eq("MAURI_E06_BEST").all()
+    assert result["max_abs_reconstruction_residual"].max() < 1e-8
+
+
+def test_multiple_simultaneous_sources():
+    truth = np.zeros(96)
+    truth[[0, 17, 53, 70, 95]] = [1, 1e2, 1e6, 3.5, 8e4]
+    np.testing.assert_allclose(corrected_in_plate_order(correct_plate_crosstalk(plate(truth))), truth, atol=2e-10)
+
+
+def test_times_and_experiments_are_solved_independently():
+    signals = [np.arange(96), np.arange(96) * 10, np.arange(96)[::-1] * 3]
+    data = pd.concat([plate(signals[0], time=0, experience="a"),
+                      plate(signals[1], time=1, experience="a"),
+                      plate(signals[2], time=0, experience="b")], ignore_index=True)
+    result = correct_plate_crosstalk(data)
+    for (experience, time), truth in zip([("a", 0), ("a", 1), ("b", 0)], signals):
+        group = result.query("experience == @experience and temps_h == @time")
+        np.testing.assert_allclose(corrected_in_plate_order(group), truth, atol=2e-12)
+
+
+def test_input_is_not_mutated():
+    data = plate(np.ones(96))
+    original = data.copy(deep=True)
+    correct_plate_crosstalk(data)
+    pdt.assert_frame_equal(data, original)
+
+
+def test_negative_results_are_preserved():
+    truth = np.ones(96)
+    truth[20] = -123.456
+    result = correct_plate_crosstalk(plate(truth))
+    assert corrected_in_plate_order(result)[20] == pytest.approx(-123.456)
+
+
+def test_missing_well_is_rejected():
+    with pytest.raises(ValueError, match="96 puits"):
+        correct_plate_crosstalk(plate(np.ones(96)).iloc[:-1])
+
+
+def test_missing_or_non_numeric_luminescence_is_rejected():
+    data = plate(np.ones(96))
+    data.loc[3, "Lum_brute"] = np.nan
+    with pytest.raises(ValueError, match="Lum_brute manquante ou non numérique"):
+        correct_plate_crosstalk(data)
+
+
+def test_duplicate_well_is_rejected():
+    data = plate(np.ones(96))
+    data.loc[95, "puits"] = "A01"
+    with pytest.raises(ValueError, match="dupliqués"):
+        correct_plate_crosstalk(data)
+
+
+def test_blank_correction_uses_dbest_lum_analysis_downstream():
+    truth = np.arange(96, dtype=float) + 100
+    corrected = correct_plate_crosstalk(plate(truth))
+    result = run_blank_correction(corrected)
+    # Two blank wells contain 100 and 101 RLU; their experimental mean is 100.5.
+    strain = result.corrected_data.query("puits == 'A03'").iloc[0]
+    assert strain["Lum_corr"] == pytest.approx(102 - 100.5)
