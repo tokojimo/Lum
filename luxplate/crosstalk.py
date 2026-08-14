@@ -89,12 +89,14 @@ def correct_plate_crosstalk(
     *,
     unmeasured_well_statuses: Mapping[str, str] | None = None,
 ) -> pd.DataFrame:
-    """Apply the Dbest solve to complete or explicitly documented partial plates.
+    """Apply the Dbest solve to complete or partial plates.
 
-    ``unmeasured_well_statuses`` maps positions to an explicit ``water``,
-    ``eau`` or ``non_luminescent`` status. Those wells may be absent because
-    their *true* source signal is assumed to be zero. Every other absent well
-    is rejected; a missing raw reading is never manufactured.
+    Every position absent from a plate/time group is considered non-luminescent:
+    its *true* source signal is assumed to be zero. ``unmeasured_well_statuses``
+    remains available as optional documentation and, when supplied, is
+    validated against the accepted ``water``, ``eau`` and ``non_luminescent``
+    vocabulary. A missing raw reading on a row that is present is never
+    manufactured.
 
     Each experiment/time group is solved independently using the principal
     submatrix in canonical A01–H12 order. The input is never mutated and
@@ -107,7 +109,6 @@ def correct_plate_crosstalk(
     if data.empty:
         raise ValueError("Le tableau de luminescence est vide.")
 
-    declared_statuses: dict[str, str] = {}
     for well, status in (unmeasured_well_statuses or {}).items():
         normalized_well = str(well).strip().upper()
         if not _WELL_RE.fullmatch(normalized_well):
@@ -121,8 +122,6 @@ def correct_plate_crosstalk(
                 f"Statut invalide pour le puits non mesuré {normalized_well} : {status!r}. "
                 "Statuts autorisés : water, eau, non_luminescent."
             )
-        declared_statuses[normalized_well] = normalized_status
-
     model = load_crosstalk_model()
     output = data.copy(deep=True)
     output["_crosstalk_row_position"] = np.arange(len(output))
@@ -152,13 +151,6 @@ def correct_plate_crosstalk(
         if duplicates:
             raise ValueError(f"Correction Dbest impossible : puits dupliqués au groupe {key!r}: " + ", ".join(duplicates))
         measured_wells = set(plate["puits"])
-        unknown_wells = set(PLATE_WELLS).difference(measured_wells, declared_statuses)
-        if unknown_wells:
-            raise ValueError(
-                "Correction Dbest impossible : puits non mesurés sans statut "
-                f"non luminescent explicite au groupe {key!r}: "
-                + ", ".join(sorted(unknown_wells))
-            )
         if plate["RLU_raw"].isna().any() or not np.isfinite(plate["RLU_raw"].to_numpy()).all():
             raise ValueError(f"Correction Dbest impossible : Lum_brute manquante ou non numérique au groupe {key!r}.")
 

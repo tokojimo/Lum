@@ -84,9 +84,16 @@ def test_negative_results_are_preserved():
     assert corrected_in_plate_order(result)[20] == pytest.approx(-123.456)
 
 
-def test_missing_well_with_unknown_status_is_rejected():
-    with pytest.raises(ValueError, match="sans statut non luminescent.*H12"):
-        correct_plate_crosstalk(plate(np.ones(96)).iloc[:-1])
+def test_unmeasured_well_is_implicitly_non_luminescent():
+    truth = np.linspace(1.0, 1_000.0, 96)
+    truth[-1] = 0.0
+    partial = plate(truth).iloc[:-1]
+
+    result = correct_plate_crosstalk(partial)
+
+    expected = pd.Series(truth, index=PLATE_WELLS).drop(index="H12")
+    actual = result.set_index("puits")["RLU_corrected"].loc[expected.index]
+    np.testing.assert_allclose(actual, expected, rtol=2e-12, atol=2e-10)
 
 
 def test_partial_plate_with_known_water_wells_uses_reduced_kernel():
