@@ -7,6 +7,7 @@ from importlib.resources import as_file, files
 import json
 import math
 import re
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -19,9 +20,12 @@ PLATE_WELLS = tuple(
     f"{row}{column:02d}" for row in "ABCDEFGH" for column in range(1, 13)
 )
 _WELL_RE = re.compile(r"^[A-H](?:0[1-9]|1[0-2])$")
-_INCOMPLETE_PLATE = (
-    "Correction Dbest impossible : les 96 puits A01–H12 sont requis pour chaque temps."
-)
+_NON_LUMINESCENT_STATUSES = {"water", "eau", "non_luminescent"}
+
+
+def _normalize_status(value: object) -> str:
+    """Normalize the deliberately small vocabulary accepted for absent wells."""
+    return re.sub(r"[\s-]+", "_", str(value).strip().casefold())
 
 
 @dataclass(frozen=True)
@@ -80,11 +84,21 @@ def load_crosstalk_model() -> CrosstalkModel:
     return CrosstalkModel(kernel, background, metadata, condition_number)
 
 
-def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
-    """Apply ``solve(Dbest, Lum_brute - background_rlu)`` to complete plates.
+def correct_plate_crosstalk(
+    data: pd.DataFrame,
+    *,
+    unmeasured_well_statuses: Mapping[str, str] | None = None,
+) -> pd.DataFrame:
+    """Apply the Dbest solve to complete or explicitly documented partial plates.
 
-    Each experiment/time group is solved independently in canonical A01–H12
-    order. The input is never mutated and negative deconvolved values are kept.
+    ``unmeasured_well_statuses`` maps positions to an explicit ``water``,
+    ``eau`` or ``non_luminescent`` status. Those wells may be absent because
+    their *true* source signal is assumed to be zero. Every other absent well
+    is rejected; a missing raw reading is never manufactured.
+
+    Each experiment/time group is solved independently using the principal
+    submatrix in canonical A01–H12 order. The input is never mutated and
+    negative deconvolved values are kept.
     """
     required = {"puits", "temps_h", "Lum_brute"}
     missing = sorted(required.difference(data.columns))
@@ -92,6 +106,22 @@ def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("Colonnes manquantes pour le cross-talk : " + ", ".join(missing))
     if data.empty:
         raise ValueError("Le tableau de luminescence est vide.")
+
+    declared_statuses: dict[str, str] = {}
+    for well, status in (unmeasured_well_statuses or {}).items():
+        normalized_well = str(well).strip().upper()
+        if not _WELL_RE.fullmatch(normalized_well):
+            raise ValueError(
+                "Position de puits non mesuré invalide (format attendu A01 à H12) : "
+                + normalized_well
+            )
+        normalized_status = _normalize_status(status)
+        if normalized_status not in _NON_LUMINESCENT_STATUSES:
+            raise ValueError(
+                f"Statut invalide pour le puits non mesuré {normalized_well} : {status!r}. "
+                "Statuts autorisés : water, eau, non_luminescent."
+            )
+        declared_statuses[normalized_well] = normalized_status
 
     model = load_crosstalk_model()
     output = data.copy(deep=True)
@@ -121,16 +151,28 @@ def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
         duplicates = sorted(plate.loc[plate["puits"].duplicated(keep=False), "puits"].unique())
         if duplicates:
             raise ValueError(f"Correction Dbest impossible : puits dupliqués au groupe {key!r}: " + ", ".join(duplicates))
-        if len(plate) != 96 or set(plate["puits"]) != set(PLATE_WELLS):
-            raise ValueError(_INCOMPLETE_PLATE)
+        measured_wells = set(plate["puits"])
+        unknown_wells = set(PLATE_WELLS).difference(measured_wells, declared_statuses)
+        if unknown_wells:
+            raise ValueError(
+                "Correction Dbest impossible : puits non mesurés sans statut "
+                f"non luminescent explicite au groupe {key!r}: "
+                + ", ".join(sorted(unknown_wells))
+            )
         if plate["RLU_raw"].isna().any() or not np.isfinite(plate["RLU_raw"].to_numpy()).all():
             raise ValueError(f"Correction Dbest impossible : Lum_brute manquante ou non numérique au groupe {key!r}.")
 
-        ordered = plate.set_index("puits").loc[list(PLATE_WELLS)]
+        measured_order = [well for well in PLATE_WELLS if well in measured_wells]
+        measured_indices = [PLATE_WELLS.index(well) for well in measured_order]
+        ordered = plate.set_index("puits").loc[measured_order]
         raw = ordered["RLU_raw"].to_numpy(dtype=float)
         optical = raw - model.background_rlu
-        corrected = np.linalg.solve(model.Dbest, optical)
-        residual = optical - model.Dbest @ corrected
+        reduced_kernel = model.Dbest[np.ix_(measured_indices, measured_indices)]
+        try:
+            corrected = np.linalg.solve(reduced_kernel, optical)
+        except np.linalg.LinAlgError as error:
+            raise ValueError(f"Sous-kernel Dbest inutilisable au groupe {key!r}.") from error
+        residual = optical - reduced_kernel @ corrected
         max_residual = float(np.max(np.abs(residual)))
         rmse = float(np.sqrt(np.mean(np.square(residual))))
 
@@ -139,7 +181,7 @@ def correct_plate_crosstalk(data: pd.DataFrame) -> pd.DataFrame:
             "RLU_corrected": corrected,
             "RLU_correction_delta": optical - corrected,
             "Lum_analysis": corrected,
-        }, index=PLATE_WELLS)
+        }, index=measured_order)
         result_positions = [output.columns.get_loc(column) for column in values.columns]
         for _, row in plate.iterrows():
             position = int(row["_crosstalk_row_position"])

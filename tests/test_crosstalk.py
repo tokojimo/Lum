@@ -84,9 +84,53 @@ def test_negative_results_are_preserved():
     assert corrected_in_plate_order(result)[20] == pytest.approx(-123.456)
 
 
-def test_missing_well_is_rejected():
-    with pytest.raises(ValueError, match="96 puits"):
+def test_missing_well_with_unknown_status_is_rejected():
+    with pytest.raises(ValueError, match="sans statut non luminescent.*H12"):
         correct_plate_crosstalk(plate(np.ones(96)).iloc[:-1])
+
+
+def test_partial_plate_with_known_water_wells_uses_reduced_kernel():
+    truth = np.linspace(10.0, 1_000.0, 96)
+    water = {"A02": "water", "H12": "eau"}
+    truth[[1, 95]] = 0.0
+    partial = plate(truth).query("puits not in @water").sample(frac=1, random_state=7)
+
+    result = correct_plate_crosstalk(partial, unmeasured_well_statuses=water)
+
+    expected = pd.Series(truth, index=PLATE_WELLS).drop(index=list(water))
+    actual = result.set_index("puits")["RLU_corrected"].loc[expected.index]
+    np.testing.assert_allclose(actual, expected, rtol=2e-12, atol=2e-10)
+    assert set(result["puits"]).isdisjoint(water)
+
+
+def test_dispersed_non_luminescent_wells_preserve_canonical_matrix_order():
+    water_wells = ["A01", "B07", "D04", "F11", "H03"]
+    measured = [well for well in PLATE_WELLS if well not in water_wells]
+    measured_indices = [PLATE_WELLS.index(well) for well in measured]
+    truth = np.linspace(-50.0, 50_000.0, len(measured))
+    model = load_crosstalk_model()
+    optical = model.Dbest[np.ix_(measured_indices, measured_indices)] @ truth
+    data = pd.DataFrame({
+        "temps_h": 0.0,
+        "puits": measured,
+        "Lum_brute": optical + model.background_rlu,
+    }).sample(frac=1, random_state=11)
+
+    result = correct_plate_crosstalk(
+        data,
+        unmeasured_well_statuses={well: "non-luminescent" for well in water_wells},
+    )
+
+    actual = result.set_index("puits").loc[measured, "RLU_corrected"]
+    np.testing.assert_allclose(actual, truth, rtol=2e-12, atol=2e-10)
+
+
+def test_invalid_absent_well_status_is_rejected():
+    with pytest.raises(ValueError, match="Statut invalide.*H12"):
+        correct_plate_crosstalk(
+            plate(np.ones(96)).iloc[:-1],
+            unmeasured_well_statuses={"H12": "unknown"},
+        )
 
 
 def test_missing_or_non_numeric_luminescence_is_rejected():

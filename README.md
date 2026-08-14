@@ -107,6 +107,14 @@ After an explicitly validated blank association, normalization is
 valid points. These parameters will remain visible and configurable. Missing
 values are never replaced by zero.
 
+The Dbest cross-talk correction accepts partially read plates only when every
+absent position is explicitly declared as `water`, `eau`, or
+`non_luminescent` through `unmeasured_well_statuses`. It solves the principal
+submatrix for the measured wells, in canonical A01–H12 order, under the
+scientific assumption that the absent wells' true source signal is zero. An
+absent well with unknown content stops correction, and LuxPlate never turns a
+missing raw reading into zero (or into `-background`).
+
 Kinetic series use every available identity component among `experience_id`,
 `souche`, `Groupe`, `sample_header`, `puits`, and `replicat`, so conditions,
 wells, biological replicates, and experiments are never silently
