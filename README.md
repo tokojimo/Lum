@@ -256,3 +256,9 @@ Le background optique E06 fait partie du modèle de cross-talk et intervient
 avant Dbest. Il est distinct des blancs expérimentaux du milieu, qui restent
 calculés ensuite à partir de `Lum_analysis`, avant la normalisation et les
 analyses cinétiques.
+
+Pour une souche, `Lum_corr` vaut `Lum_analysis` moins la moyenne des blancs
+déconvolués du même milieu, de la même expérience/plaque et du même temps. Pour
+un blanc, `Lum_corr` conserve au contraire son `Lum_analysis` absolu afin de ne
+pas masquer le niveau restant après déconvolution. Le signal centré, réservé au
+contrôle qualité, est exporté séparément dans `Lum_blank_residual`.

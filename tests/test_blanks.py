@@ -75,18 +75,23 @@ def test_profiles_are_group_specific_and_formulas_are_numeric():
     assert row["Lum_corr"] == pytest.approx(90)
 
 
-def test_corrected_output_keeps_retained_blank_residuals():
+def test_corrected_output_keeps_absolute_blanks_and_separate_residuals():
     result = run_blank_correction(blank_table())
     blanks = result.corrected_data.query("type == 'blanc'")
     assert len(blanks) == 6
-    assert blanks[["DO_corr", "Lum_corr"]].notna().all().all()
+    assert blanks[["DO_corr", "Lum_corr", "Lum_blank_residual"]].notna().all().all()
     assert blanks.query("Groupe == 'A' and temps_h == 0")["DO_corr"].tolist() == pytest.approx([-0.05, 0.05])
+    at_zero = blanks.query("Groupe == 'A' and temps_h == 0")
+    assert at_zero["Lum_corr"].tolist() == pytest.approx([10, 30])
+    assert at_zero["Lum_blank_residual"].tolist() == pytest.approx([-10, 10])
+    assert blanks.groupby(["Groupe", "temps_h"])["Lum_blank_residual"].mean().eq(0).all()
 
 
 def test_missing_group_blank_is_not_borrowed_and_is_reported():
     result = run_blank_correction(blank_table())
     rows = result.corrected_data.query("Groupe == 'C'")
     assert rows[["DO_corr", "Lum_corr"]].isna().all().all()
+    assert rows["Lum_blank_residual"].isna().all()
     assert set(result.warnings["Groupe"]) == {"C"}
 
 

@@ -922,20 +922,22 @@ def build_guided_raw_figures(data: pd.DataFrame, *, sample_type: str) -> list[tu
 
 
 def build_guided_corrected_figures(
-    data: pd.DataFrame, *, sample_type: str
+    data: pd.DataFrame, *, sample_type: str, lum_value: str = "Lum_corr"
 ) -> list[tuple[str, object]]:
     """Build guided figures from blank-corrected OD and luminescence values.
 
     The layout matches the raw figures so each condition and biological
     replicate can be compared directly between the raw and corrected tabs.
     """
-    required = {"DO_corr", "Lum_corr"}
+    if lum_value not in {"Lum_corr", "Lum_blank_residual"}:
+        raise ValueError("lum_value doit être 'Lum_corr' ou 'Lum_blank_residual'.")
+    required = {"DO_corr", lum_value}
     missing = required.difference(data.columns)
     if missing:
         raise ValueError(f"Colonnes manquantes pour la figure corrigée : {sorted(missing)}")
 
     renamed = data.rename(columns={"DO_brute": "_DO_brute", "Lum_brute": "_Lum_brute"}).rename(
-        columns={"DO_corr": "DO_brute", "Lum_corr": "Lum_brute"}
+        columns={"DO_corr": "DO_brute", lum_value: "Lum_brute"}
     )
     figures = build_guided_raw_figures(renamed, sample_type=sample_type)
     for _, figure in figures:
@@ -946,11 +948,16 @@ def build_guided_corrected_figures(
             )
             axes[row, 1].set_ylabel(
                 axes[row, 1].get_ylabel().replace(
-                    "Luminescence brute (RLU)", "Luminescence corrigée (RLU)"
+                    "Luminescence brute (RLU)",
+                    ("Résidu luminescent du blanc (RLU)" if lum_value == "Lum_blank_residual"
+                     else "Luminescence corrigée (RLU)"),
                 )
             )
         axes[0, 0].set_title("Densité optique corrigée")
-        axes[0, 1].set_title("Luminescence corrigée")
+        axes[0, 1].set_title(
+            "Résidu luminescent du blanc" if lum_value == "Lum_blank_residual"
+            else "Luminescence corrigée"
+        )
     return figures
 
 
@@ -959,9 +966,9 @@ def build_guided_crosstalk_figures(
 ) -> list[tuple[str, object]]:
     """Plot luminescence after cross-talk correction, before blank subtraction.
 
-    Keeping this intermediate signal visible is important because ``Lum_corr``
-    is subsequently centred using the mean blanks and therefore cannot be used
-    on its own to assess the optical cross-talk model.
+    Keeping this intermediate signal visible makes the optical correction
+    directly inspectable. For blanks it is also retained as ``Lum_corr``;
+    their centred QC signal lives separately in ``Lum_blank_residual``.
     """
     if "RLU_corrected" not in data.columns:
         raise ValueError("Colonne manquante pour la figure de cross-talk : RLU_corrected")

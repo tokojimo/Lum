@@ -27,7 +27,11 @@ provenance and identity fields include `source_file`, `source_sha256`,
 `plate_id`, `experiment_id`, `biological_replicate_id`,
 `technical_replicate_id`, `condition_id`, `strain_id`, `medium_id`, `group_id`,
 `puits`, `temps_h`, and `lecture`. Measurement fields include `DO_brute`,
-`Lum_brute`, `DO_corr`, `Lum_corr`, and `Lum_norm`.
+`Lum_brute`, `Lum_analysis`, `DO_corr`, `Lum_corr`, `Lum_blank_residual`, and
+`Lum_norm`. For strains, `Lum_corr` is `Lum_analysis` minus the mean
+deconvolved blanks from the same group and time. For blanks, `Lum_corr` retains
+`Lum_analysis`; only `Lum_blank_residual` is centred on the corresponding blank
+mean for quality control.
 
 The internal uniqueness candidate is `(plate_id, biological_replicate_id,
 puits, temps_h, lecture)`. Repeated equal values are flagged as duplicates;
@@ -87,4 +91,3 @@ derived rows rather than overwriting observations.
 - No inferred blank, alias, exclusion, merge, interpolation, or conflict average
   is applied without an explicit recorded decision.
 - Inferential statistics are unavailable below two independent biological IDs.
-
