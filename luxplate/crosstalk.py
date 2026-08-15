@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import lsq_linear
 
 
 KERNEL_ID = "MAURI_E06_BEST"
@@ -99,8 +100,8 @@ def correct_plate_crosstalk(
     manufactured.
 
     Each experiment/time group is solved independently using the principal
-    submatrix in canonical A01–H12 order. The input is never mutated and
-    negative deconvolved values are kept.
+    submatrix in canonical A01–H12 order. The input is never mutated and the
+    deconvolved source signal is constrained to non-negative values.
     """
     required = {"puits", "temps_h", "Lum_brute"}
     missing = sorted(required.difference(data.columns))
@@ -160,10 +161,19 @@ def correct_plate_crosstalk(
         raw = ordered["RLU_raw"].to_numpy(dtype=float)
         optical = raw - model.background_rlu
         reduced_kernel = model.Dbest[np.ix_(measured_indices, measured_indices)]
-        try:
-            corrected = np.linalg.solve(reduced_kernel, optical)
-        except np.linalg.LinAlgError as error:
-            raise ValueError(f"Sous-kernel Dbest inutilisable au groupe {key!r}.") from error
+        solution = lsq_linear(
+            reduced_kernel,
+            optical,
+            bounds=(0.0, np.inf),
+            method="trf",
+            lsmr_tol="auto",
+        )
+        if not solution.success:
+            raise ValueError(
+                f"Déconvolution non négative impossible au groupe {key!r}: "
+                f"{solution.message}"
+            )
+        corrected = solution.x
         residual = optical - reduced_kernel @ corrected
         max_residual = float(np.max(np.abs(residual)))
         rmse = float(np.sqrt(np.mean(np.square(residual))))

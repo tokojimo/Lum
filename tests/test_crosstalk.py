@@ -56,7 +56,11 @@ def test_synthetic_mathematical_identity_and_output_traceability():
 def test_multiple_simultaneous_sources():
     truth = np.zeros(96)
     truth[[0, 17, 53, 70, 95]] = [1, 1e2, 1e6, 3.5, 8e4]
-    np.testing.assert_allclose(corrected_in_plate_order(correct_plate_crosstalk(plate(truth))), truth, atol=2e-10)
+    np.testing.assert_allclose(
+        corrected_in_plate_order(correct_plate_crosstalk(plate(truth))),
+        truth,
+        atol=1e-9,
+    )
 
 
 def test_times_and_experiments_are_solved_independently():
@@ -77,11 +81,13 @@ def test_input_is_not_mutated():
     pdt.assert_frame_equal(data, original)
 
 
-def test_negative_results_are_preserved():
+def test_negative_results_are_constrained_to_zero():
     truth = np.ones(96)
     truth[20] = -123.456
     result = correct_plate_crosstalk(plate(truth))
-    assert corrected_in_plate_order(result)[20] == pytest.approx(-123.456)
+    corrected = corrected_in_plate_order(result)
+    assert np.all(corrected >= 0)
+    assert corrected[20] == pytest.approx(0, abs=1e-8)
 
 
 def test_unmeasured_well_is_implicitly_non_luminescent():
@@ -114,7 +120,7 @@ def test_dispersed_non_luminescent_wells_preserve_canonical_matrix_order():
     water_wells = ["A01", "B07", "D04", "F11", "H03"]
     measured = [well for well in PLATE_WELLS if well not in water_wells]
     measured_indices = [PLATE_WELLS.index(well) for well in measured]
-    truth = np.linspace(-50.0, 50_000.0, len(measured))
+    truth = np.linspace(50.0, 50_000.0, len(measured))
     model = load_crosstalk_model()
     optical = model.Dbest[np.ix_(measured_indices, measured_indices)] @ truth
     data = pd.DataFrame({
