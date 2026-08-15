@@ -1,0 +1,133 @@
+{
+  "source_well": "E06",
+  "kernel_id": "MAURI_E06_BEST",
+  "average_kernel_id": "MAURI_E06_AVERAGE",
+  "condition_number_average": 1.1092187917979544,
+  "condition_number_best": 1.121599515493193,
+  "conditions_same": true,
+  "background": {
+    "method": "farthest_wells_at_lowest_plate_luminescence",
+    "source_well": "E06",
+    "selection_metric": "plate_total_rlu",
+    "lowest_n_timepoints": 1,
+    "selected_timepoint_idx": [
+      1
+    ],
+    "selected_time_s": [
+      1800
+    ],
+    "selected_metric_values": [
+      25271.473
+    ],
+    "selected_source_rlu_raw": [
+      20860.0
+    ],
+    "farthest_n": 8,
+    "background_wells": [
+      "A12",
+      "B12",
+      "H12",
+      "A01",
+      "A11",
+      "C12",
+      "G12",
+      "D12"
+    ],
+    "background_rlu": 33.22625,
+    "background_sd": 11.664426919362256,
+    "sensitivity_sigma": 3.0,
+    "instrument_sensitivity_rlu": 34.99328075808677,
+    "n_background_samples": 8
+  },
+  "stability_window": {
+    "method": "longest_contiguous_window_first_two_shells_linear_drift",
+    "monitor_wells": [
+      "D05",
+      "D06",
+      "D07",
+      "E05",
+      "E07",
+      "F05",
+      "F06",
+      "F07"
+    ],
+    "monitor_max_distance": 1.4142135623730951,
+    "min_points": 8,
+    "max_relative_drift": 0.1,
+    "required_monitor_fraction": 1.0,
+    "source_min_signal_for_stability": 34.99328075808677,
+    "start_timepoint_idx": 4,
+    "end_timepoint_idx": 31,
+    "start_time_s": 7200,
+    "end_time_s": 55802,
+    "n_timepoints": 28,
+    "stable_monitor_fraction": 1.0,
+    "median_relative_drift": 0.027652233360186865,
+    "max_relative_drift_observed": 0.08120257959325679
+  },
+  "Dbest": {
+    "method": "mauri_dbest_iterative_self_correction",
+    "historical_stopping_criterion": "one_sided_residual_le_plus_sensitivity",
+    "source_well": "E06",
+    "random_seed": 12345,
+    "max_iterations": 1000,
+    "random_kernel_step": 0.1,
+    "iterations_attempted": 326,
+    "accepted_kernels": 13,
+    "working_fraction_below_sensitivity": 1.0,
+    "direct_fraction_below_sensitivity": 1.0,
+    "direct_n_above_sensitivity": 0,
+    "direct_max_excess_rlu": 0.0,
+    "direct_fraction_within_abs_sensitivity": 0.09548872180451128,
+    "direct_n_outside_abs_sensitivity": 2406,
+    "direct_max_abs_excess_rlu": 4110.247204276923,
+    "direct_fraction_below_minus_sensitivity": 0.9045112781954887,
+    "direct_min_non_source_rlu": -4145.24048503501,
+    "direct_max_non_source_rlu": 32.32104017417978,
+    "instrument_sensitivity_rlu": 34.99328075808677,
+    "condition_number_Dbest": 1.121599515493193,
+    "converged": true,
+    "converged_mauri_one_sided": true,
+    "converged_symmetric_abs": false,
+    "stable_timepoint_idx": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ]
+  },
+  "B_matrix_shape": [
+    8,
+    12
+  ],
+  "kernel_shape": [
+    96,
+    96
+  ],
+  "n_B_time_observations": 3072,
+  "n_B_final_positions": 96
+}
