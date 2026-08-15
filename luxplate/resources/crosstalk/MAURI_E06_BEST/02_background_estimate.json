@@ -1,0 +1,34 @@
+{
+  "method": "farthest_wells_at_lowest_plate_luminescence",
+  "source_well": "E06",
+  "selection_metric": "plate_total_rlu",
+  "lowest_n_timepoints": 1,
+  "selected_timepoint_idx": [
+    1
+  ],
+  "selected_time_s": [
+    1800
+  ],
+  "selected_metric_values": [
+    25271.473
+  ],
+  "selected_source_rlu_raw": [
+    20860.0
+  ],
+  "farthest_n": 8,
+  "background_wells": [
+    "A12",
+    "B12",
+    "H12",
+    "A01",
+    "A11",
+    "C12",
+    "G12",
+    "D12"
+  ],
+  "background_rlu": 33.22625,
+  "background_sd": 11.664426919362256,
+  "sensitivity_sigma": 3.0,
+  "instrument_sensitivity_rlu": 34.99328075808677,
+  "n_background_samples": 8
+}
