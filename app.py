@@ -65,10 +65,14 @@ def cached_guided_raw_figures(data: pd.DataFrame, sample_type: str):
 
 
 @st.cache_data(show_spinner="Préparation des courbes corrigées…", max_entries=12)
-def cached_guided_corrected_figures(data: pd.DataFrame, sample_type: str):
+def cached_guided_corrected_figures(
+    data: pd.DataFrame, sample_type: str, lum_value: str = "Lum_corr"
+):
     """Build blank-corrected previews only once for each selection."""
     corrected = run_blank_correction(data).corrected_data
-    return build_guided_corrected_figures(corrected, sample_type=sample_type)
+    return build_guided_corrected_figures(
+        corrected, sample_type=sample_type, lum_value=lum_value
+    )
 
 
 @st.cache_data(show_spinner="Préparation des courbes après cross-talk…", max_entries=12)
@@ -450,7 +454,9 @@ with guided_tab:
                 tab_names = ["Courbes des blancs", "Courbes des échantillons"]
                 if guided_crosstalk:
                     tab_names.append("Après correction du cross-talk")
-                tab_names.extend(["Blancs corrigés", "Luminescence corrigée"])
+                tab_names.extend([
+                    "Blancs déconvolués", "Résidu des blancs", "Luminescence corrigée"
+                ])
                 info_tabs = st.tabs(tab_names)
                 with info_tabs[0]:
                     st.caption(
@@ -480,14 +486,23 @@ with guided_tab:
                     next_tab += 1
                 with info_tabs[next_tab]:
                     st.caption(
-                        "Courbes des blancs après soustraction, à chaque temps, de la moyenne des "
-                        "blancs du même milieu. Une courbe centrée autour de zéro est attendue."
+                        "Niveau absolu des blancs après correction optique. Il n'est pas recentré : "
+                        "ces courbes permettent d'évaluer directement la déconvolution du cross-talk."
                     )
                     for _, figure in cached_guided_corrected_figures(
                         guided_selected, sample_type="blanc"
                     ):
                         st.pyplot(figure, use_container_width=True)
                 with info_tabs[next_tab + 1]:
+                    st.caption(
+                        "Contrôle qualité uniquement : Lum_blank_residual soustrait, à chaque temps, "
+                        "la moyenne des blancs du même milieu. Sa moyenne vaut zéro par construction."
+                    )
+                    for _, figure in cached_guided_corrected_figures(
+                        guided_selected, sample_type="blanc", lum_value="Lum_blank_residual"
+                    ):
+                        st.pyplot(figure, use_container_width=True)
+                with info_tabs[next_tab + 2]:
                     st.caption(
                         "Courbes des échantillons après soustraction, à chaque temps, de la moyenne "
                         "des blancs du même milieu. La densité optique corrigée est affichée à gauche "

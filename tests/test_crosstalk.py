@@ -167,3 +167,6 @@ def test_blank_correction_uses_dbest_lum_analysis_downstream():
     # Two blank wells contain 100 and 101 RLU; their experimental mean is 100.5.
     strain = result.corrected_data.query("puits == 'A03'").iloc[0]
     assert strain["Lum_corr"] == pytest.approx(102 - 100.5)
+    blanks = result.corrected_data.query("type == 'blanc'").sort_values("puits")
+    assert blanks["Lum_corr"].tolist() == pytest.approx([100, 101])
+    assert blanks["Lum_blank_residual"].tolist() == pytest.approx([-0.5, 0.5])

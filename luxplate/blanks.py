@@ -130,16 +130,27 @@ def calculate_blank_profiles(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def correct_blanks(data: pd.DataFrame, blank_profiles: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Correct every retained strain and blank against its group/time profile.
+    """Correct strains while preserving the absolute blank luminescence.
 
-    Keeping corrected blanks is part of the public contract: the normalization
-    step uses their residual OD distribution to derive its detection threshold.
+    ``Lum_corr`` is blank-subtracted for strains, but equals the optical-stage
+    luminescence for blanks. Their centred value is exposed separately as
+    ``Lum_blank_residual``. OD remains blank-subtracted for every row because
+    its blank residual distribution determines the normalization threshold.
     """
     observations = data.loc[data["type"].isin(["souche", "blanc"])].copy()
     corrected = observations.merge(blank_profiles, on=["Groupe", "temps_h"], how="left", validate="many_to_one")
     corrected["DO_corr"] = corrected["DO_brute"] - corrected["DO_blanc_moyenne"]
     luminescence = "Lum_analysis" if "Lum_analysis" in corrected.columns else "Lum_brute"
-    corrected["Lum_corr"] = corrected[luminescence] - corrected["Lum_blanc_moyenne"]
+    corrected["Lum_blank_residual"] = np.where(
+        corrected["type"].eq("blanc"),
+        corrected[luminescence] - corrected["Lum_blanc_moyenne"],
+        np.nan,
+    )
+    corrected["Lum_corr"] = np.where(
+        corrected["type"].eq("blanc"),
+        corrected[luminescence],
+        corrected[luminescence] - corrected["Lum_blanc_moyenne"],
+    )
     missing = corrected.loc[
         corrected["type"].eq("souche")
         & corrected[["DO_blanc_moyenne", "Lum_blanc_moyenne"]].isna().any(axis=1),
