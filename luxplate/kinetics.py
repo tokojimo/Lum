@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 
-REQUIRED_COLUMNS = ("temps_h", "souche", "DO_corr", "Lum_norm")
+REQUIRED_COLUMNS = ("temps_h", "souche", "DO_corr", "Lum_corr", "Lum_norm")
 IDENTITY_COLUMNS = ("experience_id", "souche", "Groupe", "sample_header", "puits", "replicat")
 METRIC_COLUMNS = (
     "od_max", "od_max_time_h", "od_auc", "max_growth_rate_per_h",
@@ -18,7 +18,8 @@ METRIC_COLUMNS = (
 )
 SERIES_METRIC_COLUMNS = (*IDENTITY_COLUMNS, "n_points_total", "n_points_jointly_finite",
     "analysis_start_h", "analysis_end_h", "growth_window_points", "growth_window_min_duration_h",
-    "growth_rate_min_r_squared", "minimum_auc_points", "n_growth_points", "od_max",
+    "growth_rate_min_r_squared", "minimum_auc_points", "auc_window_start_h", "auc_window_end_h",
+    "auc_window_duration_h", "n_auc_points", "od_max",
     "od_max_time_h", "od_auc", "max_growth_rate_per_h", "growth_rate_r_squared",
     "max_growth_rate_start_h", "max_growth_rate_end_h", "doubling_time_h",
     "growth_rate_publishability_reason", "n_lum_norm_points", "lum_norm_peak",
@@ -146,18 +147,40 @@ def calculate_growth_metrics(series: pd.DataFrame, growth_window_points: int = 3
     return metrics
 
 
-def calculate_luminescence_metrics(series: pd.DataFrame) -> dict[str, float | int]:
+def calculate_luminescence_metrics(
+    series: pd.DataFrame, window_start_h: float | None = None, window_end_h: float | None = None,
+) -> dict[str, float | int]:
+    """Calculate luminescence metrics and the ratio of fixed-window AUCs.
+
+    ``lum_norm_auc`` is retained as the public column name, but represents
+    ``AUC(Lum_corr) / AUC(DO_corr)``. Both areas use the same jointly finite
+    observations and the same acquisition window. Pointwise ``Lum_norm`` is
+    used only for peak metrics and plotting.
+    """
     peak, peak_time = calculate_peak(series["temps_h"], series["Lum_norm"])
     finite_norm = np.isfinite(pd.to_numeric(series["Lum_norm"], errors="coerce"))
-    result = {"n_lum_norm_points": int(finite_norm.sum()), "lum_norm_peak": peak,
-              "lum_norm_peak_time_h": peak_time,
-              "lum_norm_auc": calculate_auc(series["temps_h"], series["Lum_norm"])}
+    time = pd.to_numeric(series["temps_h"], errors="coerce").to_numpy(float)
+    od = pd.to_numeric(series["DO_corr"], errors="coerce").to_numpy(float)
+    lum = pd.to_numeric(series["Lum_corr"], errors="coerce").to_numpy(float)
+    start = float(np.nanmin(time)) if window_start_h is None else float(window_start_h)
+    end = float(np.nanmax(time)) if window_end_h is None else float(window_end_h)
+    common = np.isfinite(time) & np.isfinite(od) & np.isfinite(lum) & (time >= start) & (time <= end)
+    auc_time, auc_od, auc_lum = time[common], od[common], lum[common]
+    od_auc = calculate_auc(auc_time, auc_od)
+    lum_auc = calculate_auc(auc_time, auc_lum)
+    ratio = lum_auc / od_auc if np.isfinite(od_auc) and od_auc > 0 else np.nan
+    covers_window = bool(
+        len(auc_time) >= 2 and np.isclose(auc_time, start).any() and np.isclose(auc_time, end).any()
+    )
+    result = {"n_lum_norm_points": int(finite_norm.sum()), "n_auc_points": int(common.sum()),
+              "auc_covers_common_window": covers_window, "lum_norm_peak": peak,
+              "lum_norm_peak_time_h": peak_time, "lum_norm_auc": ratio,
+              "lum_corr_auc": lum_auc, "fixed_window_od_auc": od_auc}
     if "Lum_corr" in series:
         corr_peak, corr_time = calculate_peak(series["temps_h"], series["Lum_corr"])
-        result.update(lum_corr_peak=corr_peak, lum_corr_peak_time_h=corr_time,
-                      lum_corr_auc=calculate_auc(series["temps_h"], series["Lum_corr"]))
+        result.update(lum_corr_peak=corr_peak, lum_corr_peak_time_h=corr_time)
     else:
-        result.update(lum_corr_peak=np.nan, lum_corr_peak_time_h=np.nan, lum_corr_auc=np.nan)
+        result.update(lum_corr_peak=np.nan, lum_corr_peak_time_h=np.nan)
     return result
 
 
@@ -169,6 +192,27 @@ def _series_group_columns(data: pd.DataFrame) -> list[str]:
     return columns
 
 
+def _common_auc_windows(strains: pd.DataFrame) -> dict[object, tuple[float, float]]:
+    """Return equal-duration AUC windows anchored at each experiment's first time.
+
+    The common duration is the longest duration supported by every experiment:
+    the complete acquisition span of the shortest experiment. With no
+    ``experience_id``, the sole dataset's complete span is used.
+    """
+    if "experience_id" in strains:
+        bounds = strains.groupby("experience_id", dropna=False)["temps_h"].agg(["min", "max"])
+    else:
+        bounds = pd.DataFrame(
+            {"min": [strains["temps_h"].min()], "max": [strains["temps_h"].max()]},
+            index=[None],
+        )
+    common_duration = float((bounds["max"] - bounds["min"]).min())
+    return {
+        experience: (float(row["min"]), float(row["min"] + common_duration))
+        for experience, row in bounds.iterrows()
+    }
+
+
 def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
     minimum_auc_points: int = 2, growth_window_min_duration_h: float = 0.0,
     growth_rate_min_r_squared: float = 0.0) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -176,19 +220,25 @@ def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
         raise ValueError("minimum_auc_points doit être un entier supérieur ou égal à 2.")
     metrics, rejected, warnings = [], [], []
     strains = data.loc[data["type"].eq("souche")] if "type" in data else data
+    auc_windows = _common_auc_windows(strains)
     for _, series in strains.groupby(_series_group_columns(data), dropna=False, sort=False):
         identity = {column: series[column].iloc[0] for column in IDENTITY_COLUMNS if column in series}
+        window_start, window_end = auc_windows[identity.get("experience_id")]
         if series["temps_h"].duplicated().any():
             warnings.append({**identity, "code": "duplicate_time",
                 "message": "Temps dupliqué : les métriques globales sont conservées, aucune fenêtre ne traverse le doublon."})
         growth = calculate_growth_metrics(series, growth_window_points, growth_window_min_duration_h,
                                           growth_rate_min_r_squared)
-        lum = calculate_luminescence_metrics(series)
+        lum = calculate_luminescence_metrics(series, window_start, window_end)
         reasons = []
         if growth["n_growth_points"] < minimum_auc_points:
             reasons.append("insufficient_growth_points")
-        if lum["n_lum_norm_points"] < minimum_auc_points:
-            reasons.append("insufficient_lum_norm_points")
+        if lum["n_auc_points"] < minimum_auc_points:
+            reasons.append("insufficient_auc_points")
+        if not lum["auc_covers_common_window"]:
+            reasons.append("incomplete_common_auc_window")
+        if not np.isfinite(lum["fixed_window_od_auc"]) or lum["fixed_window_od_auc"] <= 0:
+            reasons.append("non_positive_od_auc")
         if reasons:
             rejected.append({**identity, "reason": ";".join(reasons), "n_points_total": len(series)})
             continue
@@ -198,6 +248,7 @@ def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
                              "message": "Le taux de croissance et/ou le temps de doublement n'est pas publiable."})
         finite_any = np.isfinite(series[["DO_corr", "Lum_norm"]].to_numpy(dtype=float)).all(axis=1)
         used_times = series.loc[finite_any, "temps_h"]
+        growth["od_auc"] = lum["fixed_window_od_auc"]
         metrics.append({**identity, "n_points_total": len(series),
             "n_points_jointly_finite": int(finite_any.sum()),
             "analysis_start_h": float(used_times.min()) if len(used_times) else np.nan,
@@ -205,7 +256,11 @@ def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
             "growth_window_points": growth_window_points,
             "growth_window_min_duration_h": growth_window_min_duration_h,
             "growth_rate_min_r_squared": growth_rate_min_r_squared,
-            "minimum_auc_points": minimum_auc_points, **growth, **lum})
+            "minimum_auc_points": minimum_auc_points,
+            "auc_window_start_h": window_start, "auc_window_end_h": window_end,
+            "auc_window_duration_h": window_end - window_start, **growth,
+            **{key: value for key, value in lum.items()
+               if key not in {"auc_covers_common_window", "fixed_window_od_auc"}}})
     return (_table(metrics, SERIES_METRIC_COLUMNS), _table(rejected, REJECTED_SERIES_COLUMNS),
             _table(warnings, WARNING_COLUMNS))
 

@@ -61,11 +61,13 @@ def test_nonpositive_infinite_and_missing_values_are_excluded():
     data = kinetic_table()
     data["DO_corr"] = [0.1, 0, -1, np.inf, 0.4]
     data["Lum_norm"] = [10, np.nan, np.inf, 20, 30]
+    growth = calculate_growth_metrics(data)
+    assert growth["n_growth_points"] == 2
+    assert growth["od_auc"] == pytest.approx(-1.05)
+
     result = run_kinetics(data)
-    row = result.series_metrics.iloc[0]
-    assert row["n_growth_points"] == 2
-    assert row["n_lum_norm_points"] == 3
-    assert row["od_auc"] == pytest.approx(-1.05)
+    assert result.series_metrics.empty
+    assert "non_positive_od_auc" in result.rejected_series.iloc[0]["reason"]
 
 
 def test_duplicate_times_warn_and_break_growth_windows_without_rejecting_global_metrics():
@@ -112,6 +114,47 @@ def test_normalized_output_integrates_with_kinetics():
 def test_auc_spans_single_and_successive_missing_observations():
     assert calculate_auc([0, 1, 2, 3], [0, 1, np.nan, 3]) == pytest.approx(4.5)
     assert calculate_auc([0, 1, 2, 3, 4], [0, 1, np.nan, np.nan, 4]) == pytest.approx(8.0)
+
+
+def test_normalized_auc_is_ratio_of_corrected_lum_and_od_aucs_on_common_window():
+    data = kinetic_table()
+    result = run_kinetics(data)
+    row = result.series_metrics.iloc[0]
+    expected_lum_auc = calculate_auc(data["temps_h"], data["Lum_corr"])
+    expected_od_auc = calculate_auc(data["temps_h"], data["DO_corr"])
+    assert row["lum_corr_auc"] == pytest.approx(expected_lum_auc)
+    assert row["lum_norm_auc"] == pytest.approx(expected_lum_auc / expected_od_auc)
+    assert row["n_auc_points"] == len(data)
+
+
+def test_auc_ratio_rejects_wells_without_the_shared_experiment_window():
+    complete = kinetic_table(header="complete")
+    incomplete = kinetic_table(header="incomplete").query("temps_h > 0")
+    result = run_kinetics(pd.concat([complete, incomplete], ignore_index=True))
+    assert result.series_metrics["sample_header"].tolist() == ["complete"]
+    rejected = result.rejected_series.set_index("sample_header")
+    assert "incomplete_common_auc_window" in rejected.loc["incomplete", "reason"]
+
+
+def test_all_experiments_use_the_complete_span_of_the_shortest_experiment():
+    long = kinetic_table(experience="long", header="long")
+    short = kinetic_table(experience="short", header="short").query("temps_h <= 2")
+    short["temps_h"] += 10
+    result = run_kinetics(pd.concat([long, short], ignore_index=True))
+    rows = result.series_metrics.set_index("experience_id")
+
+    expected_long_lum = calculate_auc(long.loc[long["temps_h"] <= 2, "temps_h"],
+                                      long.loc[long["temps_h"] <= 2, "Lum_corr"])
+    expected_long_od = calculate_auc(long.loc[long["temps_h"] <= 2, "temps_h"],
+                                     long.loc[long["temps_h"] <= 2, "DO_corr"])
+    assert rows.loc["long", "lum_norm_auc"] == pytest.approx(expected_long_lum / expected_long_od)
+    assert rows.loc["long", "od_auc"] == pytest.approx(expected_long_od)
+    assert rows.loc["long", "auc_window_duration_h"] == pytest.approx(2)
+    assert rows.loc["short", "auc_window_duration_h"] == pytest.approx(2)
+    assert rows.loc["long", "auc_window_start_h"] == pytest.approx(0)
+    assert rows.loc["short", "auc_window_start_h"] == pytest.approx(10)
+    assert rows.loc["long", "n_auc_points"] == 3
+    assert rows.loc["short", "n_auc_points"] == 3
 
 
 def test_same_header_in_two_wells_remains_two_series_and_replicate_is_summarized_separately():

@@ -53,7 +53,7 @@ Le CSV de référence doit exposer au minimum :
 | `growth_rate_r_squared` | R² de cette régression |
 | `doubling_time_h` | `log(2) / max_growth_rate_per_h` si la pente est positive |
 | `lum_norm_peak`, `lum_norm_peak_time_h` | pic de `Lum_norm` et premier temps correspondant |
-| `lum_norm_auc` | AUC trapézoïdale de `Lum_norm` |
+| `lum_norm_auc` | rapport `AUC(Lum_corr) / AUC(DO_corr)` sur une durée commune égale à celle de l'expérience la plus courte |
 | `status`, `reason` | `analyzed`, `rejected` ou `warned`, avec motif explicite |
 
 Les fichiers doivent préserver suffisamment de décimales pour éviter qu'un
