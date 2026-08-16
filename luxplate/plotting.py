@@ -559,7 +559,7 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
 
     metric_labels = {"lum_norm_peak": r"Peak normalized luminescence (RLU/OD$_{600}$)",
         "lum_norm_peak_time_h": "Time of normalized luminescence peak (h)",
-        "lum_norm_auc": r"Normalized luminescence AUC (RLU/OD$_{600}$)·h",
+        "lum_norm_auc": r"Luminescence AUC / OD$_{600}$ AUC (RLU/OD$_{600}$)",
         "lum_norm_peak_fold_change": "Peak normalized luminescence (fold change vs P0)",
         "lum_norm_auc_fold_change": "Normalized luminescence AUC (fold change vs P0)",
         "doubling_time_h": "Doubling time (h)"}
@@ -799,11 +799,12 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     metric_families = {"peak": ("lum_norm_peak", "pic_luminescence_normalisee", "Peak normalized luminescence"),
                        "peak_time": ("lum_norm_peak_time_h", "temps_pic_luminescence_normalisee",
                                      "Time of normalized luminescence peak"),
-                       "auc": ("lum_norm_auc", "auc_luminescence_normalisee", "Normalized luminescence AUC"),
+                       "auc": ("lum_norm_auc", "auc_luminescence_normalisee",
+                               "Luminescence AUC / OD AUC"),
                        "peak_fc": ("lum_norm_peak", "pic_luminescence_normalisee_fold_change_P0",
                                    "Peak normalized luminescence — fold change vs P0"),
                        "auc_fc": ("lum_norm_auc", "auc_luminescence_normalisee_fold_change_P0",
-                                  "Normalized luminescence AUC — fold change vs P0"),
+                                  "Luminescence AUC / OD AUC — fold change vs P0"),
                        "doubling": ("doubling_time_h", "temps_doublement", "Doubling time")}
     requested = set(families).intersection(metric_families)
     if requested:

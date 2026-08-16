@@ -225,8 +225,8 @@ def render_guided_results(complete, base: str) -> None:
             "Pic normalisé": "peak",
             "Pic normalisé — fold change vs P0 par milieu": "peak_fc",
             "Temps du pic normalisé": "peak_time",
-            "AUC normalisée": "auc",
-            "AUC normalisée — fold change vs P0 par milieu": "auc_fc",
+            "Rapport AUC luminescence / AUC DO": "auc",
+            "Rapport AUC luminescence / AUC DO — fold change vs P0 par milieu": "auc_fc",
             "Temps de doublement": "doubling",
         }
         guided_figure_labels = st.multiselect(
