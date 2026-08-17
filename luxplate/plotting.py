@@ -832,6 +832,24 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     return figures
 
 
+def collect_publication_statistics(
+    figures: list[tuple[str, object]],
+) -> pd.DataFrame:
+    """Collect the inferential tables attached to publication figures.
+
+    Time-course figures do not carry statistical results, whereas each metric
+    figure may carry one row per validated hypothesis. Returning one table
+    lets the interface show the tests in a predictable place instead of
+    requiring users to find the table below the relevant figure.
+    """
+    tables = []
+    for name, figure in figures:
+        statistics = getattr(figure, "_luxplate_statistics", None)
+        if isinstance(statistics, pd.DataFrame) and not statistics.empty:
+            tables.append(statistics.assign(figure=name))
+    return pd.concat(tables, ignore_index=True) if tables else pd.DataFrame()
+
+
 def plot_raw_curves(data: pd.DataFrame):
     """Plot every raw technical curve; no averaging or interpolation."""
     required = {"temps_h", "souche", "sample_header", "DO_brute", "Lum_brute"}

@@ -90,3 +90,43 @@ def test_nonpositive_values_are_excluded_and_three_pairs_are_required():
     assert insufficient.loc[0, "n_pairs"] == 2
     assert np.isnan(insufficient.loc[0, "p_raw"])
     assert insufficient.loc[0, "significance"] == "NA"
+    assert insufficient.loc[0, "calculation_status"] == "non calculable"
+    assert "moins de 3 paires" in insufficient.loc[0, "non_calculable_reason"]
+
+
+def test_conditions_are_matched_canonically_instead_of_silently_disappearing():
+    biological = pd.DataFrame([
+        {"experience_id": experiment, "condition": condition, "value": value}
+        for experiment, reporter, control in (
+            (1, 20, 10), (2, 45, 20), (3, 95, 40), (4, 210, 80)
+        )
+        for condition, value in (
+            ("PspeD2-1A\0SCFM2 (Spd)", reporter),
+            ("P0\0SCFM2 (Spd)", control),
+        )
+    ])
+
+    result = paired_directional_t_tests(
+        biological, value="value", condition="condition",
+        comparisons=(("  psped2-1a\0Experiment 2 | SCFM2  (Spd) ",
+                      "p0\0SCFM2 (Spd)"),),
+    )
+
+    assert len(result) == 1
+    assert result.loc[0, "condition_1"] == "PspeD2-1A\0SCFM2 (Spd)"
+    assert result.loc[0, "n_pairs"] == 4
+    assert result.loc[0, "calculation_status"] == "calculé"
+
+
+def test_unmatched_validated_condition_is_reported_with_a_reason():
+    biological = _biological([(1, 2, 3), (2, 4, 6), (4, 9, 12)])
+
+    result = paired_directional_t_tests(
+        biological, value="value",
+        comparisons=(("missing", "control"),),
+    )
+
+    assert len(result) == 1
+    assert result.loc[0, "condition_1"] == "missing"
+    assert result.loc[0, "calculation_status"] == "non calculable"
+    assert "condition A introuvable" in result.loc[0, "non_calculable_reason"]

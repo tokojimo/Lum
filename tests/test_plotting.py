@@ -8,7 +8,7 @@ from matplotlib.ticker import FuncFormatter
 
 from luxplate.plotting import (_aligned_biological_summary, build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
-                               build_publication_figures,
+                               build_publication_figures, collect_publication_statistics,
                                directional_condition_options,
                                directional_comparison_options, metric_fold_change_vs_control,
                                plot_kinetics, plot_metric_points, plot_mixed_panels,
@@ -31,6 +31,32 @@ def test_directional_condition_options_exposes_each_box_once():
         "P0 · SCFM2 > PspeD · SCFM2": ("P0-lux\0SCFM2", "PspeD-lux\0SCFM2"),
         "PspeD · SCFM2 > P0 · SCFM2": ("PspeD-lux\0SCFM2", "P0-lux\0SCFM2"),
     }
+
+
+def test_collect_publication_statistics_makes_one_visible_table():
+    first = plt.figure()
+    first._luxplate_statistics = pd.DataFrame([
+        {"condition_1": "A\0M1", "condition_2": "B\0M1", "p_raw": .02}
+    ])
+    second = plt.figure()  # Time-course figures intentionally have no statistics.
+    third = plt.figure()
+    third._luxplate_statistics = pd.DataFrame([
+        {"condition_1": "A\0M2", "condition_2": "B\0M2", "p_raw": .03}
+    ])
+
+    result = collect_publication_statistics([
+        ("peak", first), ("growth", second), ("auc", third)
+    ])
+
+    assert result["figure"].tolist() == ["peak", "auc"]
+    assert result["p_raw"].tolist() == [.02, .03]
+    plt.close("all")
+
+
+def test_collect_publication_statistics_is_empty_without_metric_tests():
+    figure = plt.figure()
+    assert collect_publication_statistics([("growth", figure)]).empty
+    plt.close(figure)
 
 
 def test_guided_raw_figures_group_technical_replicates_in_one_biological_row():
@@ -457,6 +483,54 @@ def test_metric_points_treats_legacy_experience_as_biological_unit():
     assert result["pairing_columns"] == "experience"
     assert result["n_pairs"] == 3
     assert "*" in [text.get_text() for text in figure.axes[0].texts]
+    plt.close(figure)
+
+
+def test_bm2_auc_three_validated_hypotheses_produce_rows_and_brackets():
+    """Reproduce the reported P0/PspeD2 BM2 guided-analysis scenario."""
+    strains = ("P0-lux", "PspeD2-1A-lux", "PspeD2-3B-lux")
+    metrics = pd.DataFrame([
+        {
+            "souche": strain,
+            "Groupe": f"Experiment {experiment} | BM2",
+            "experience_id": f"exp{experiment}",
+            "replicat": 1,
+            "lum_norm_auc": value,
+        }
+        for experiment, values in enumerate((
+            (10, 18, 14), (12, 25, 20), (9, 22, 16), (14, 31, 24)
+        ), start=1)
+        for strain, value in zip(strains, values)
+    ])
+    # These are the exact identifiers returned by the guided UI, rather than
+    # identifiers constructed independently by the test.
+    conditions = directional_condition_options(metrics)
+    p0 = conditions["P0 · BM2"]
+    d21 = conditions["PspeD2-1A · BM2"]
+    d23 = conditions["PspeD2-3B · BM2"]
+    hypotheses = ((d21, p0), (d23, p0), (d21, d23))
+
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", compare_media=True,
+        title="Luminescence AUC / OD AUC",
+        directional_comparisons=hypotheses,
+    )
+
+    statistics = figure._luxplate_statistics
+    assert len(statistics) == 3
+    assert list(zip(statistics["condition_1"], statistics["condition_2"])) == list(hypotheses)
+    assert statistics["calculation_status"].eq("calculé").all()
+    annotation_labels = [
+        text.get_text() for text in figure.axes[0].texts
+        if text.get_text() in {"NA", "ns", "*", "**", "***", "****"}
+    ]
+    assert len(annotation_labels) == 3
+    # Each annotation label is paired with one four-segment bracket line.
+    bracket_lines = [
+        line for line in figure.axes[0].lines
+        if len(line.get_xdata()) == 4 and np.asarray(line.get_ydata()).max() < 1
+    ]
+    assert len(bracket_lines) == 3
     plt.close(figure)
 
 

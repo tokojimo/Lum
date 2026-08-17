@@ -12,7 +12,8 @@ from luxplate.crosstalk import correct_plate_crosstalk
 from luxplate.export import package_figures
 from luxplate.plotting import (build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
-                               build_publication_figures, directional_condition_options)
+                               build_publication_figures, collect_publication_statistics,
+                               directional_condition_options)
 from luxplate.project import PROJECT_KEYS, export_project, import_project
 from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
 from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
@@ -292,6 +293,38 @@ def render_guided_results(complete, base: str) -> None:
                 lum_scale="log" if guided_lum_label == "Logarithmique" else "linear",
                 directional_comparisons=guided_selected_comparisons,
             )
+            statistical_results = collect_publication_statistics(guided_figures)
+            if guided_selected_comparisons:
+                st.subheader("Tests statistiques")
+                if statistical_results.empty:
+                    st.warning(
+                        "Aucun test n'est disponible avec les figures sélectionnées. "
+                        "Ajoutez au moins une figure de synthèse (pic, temps du pic, "
+                        "AUC ou temps de doublement)."
+                    )
+                else:
+                    visible_statistics = statistical_results.copy()
+                    for column in ("condition_1", "condition_2"):
+                        visible_statistics[column] = visible_statistics[column].str.replace(
+                            "\0", " · ", regex=False
+                        )
+                    st.dataframe(
+                        visible_statistics[["figure", "condition_1", "condition_2", "n_pairs",
+                                            "p_raw", "significance", "calculation_status",
+                                            "non_calculable_reason"]].rename(columns={
+                            "figure": "Mesure", "condition_1": "Condition A",
+                            "condition_2": "Condition B", "n_pairs": "Paires biologiques",
+                            "p_raw": "p-value", "significance": "Résultat",
+                            "calculation_status": "Statut",
+                            "non_calculable_reason": "Raison si non calculable",
+                        }),
+                        use_container_width=True, hide_index=True,
+                    )
+                    if statistical_results["p_raw"].isna().any():
+                        st.info(
+                            "Les lignes « NA » ne disposent pas des trois paires biologiques "
+                            "positives requises pour calculer le test."
+                        )
             for guided_name, guided_figure in guided_figures:
                 st.subheader(guided_name.replace("_", " ").title())
                 st.pyplot(guided_figure, use_container_width=True)
