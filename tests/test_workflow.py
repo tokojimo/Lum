@@ -1,5 +1,7 @@
+import matplotlib.pyplot as plt
 import pandas as pd
 
+from luxplate.plotting import directional_condition_options, plot_metric_points
 from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
                                filter_experiment_data, run_complete_analysis)
 
@@ -80,3 +82,61 @@ def test_bulk_decisions_can_remove_first_time_from_every_blank_in_one_experiment
     result = run_complete_analysis(data, decisions, consecutive_points=2, growth_window_points=2)
     assert len(result.blank_correction.excluded_data) == 1
     assert result.blank_correction.excluded_data.iloc[0]["temps_h"] == 0
+
+
+def test_three_uploaded_bm2_experiments_reach_paired_statistics_end_to_end():
+    strains = (
+        "14.1Ac attB::P0-lux",
+        "14.1Ac attB::PspeD2-1A-lux",
+        "14.1Ac attB::PspeD2-3B-lux",
+    )
+    experiences = (
+        "260403_BM2_testsScreening",
+        "070826_BM2_LB",
+        "140826_BM2_LB_Rep3",
+    )
+    rows = []
+    for experiment_number, experience in enumerate(experiences, start=1):
+        group = f"exp{experiment_number}|BM2"
+        for strain_number, strain in enumerate(strains, start=1):
+            for technical in (1, 2):
+                for time, od in enumerate((.1, .2, .4, .8)):
+                    rows.append({
+                        "experience": experience, "temps_h": time + experiment_number / 10,
+                        "souche": strain, "Groupe": group, "replicat": technical,
+                        "sample_header": f"exp{experiment_number}|{strain}|{technical}",
+                        "puits": f"A{technical:02d}", "DO_brute": od,
+                        "Lum_brute": od * (strain_number + experiment_number) * 100,
+                        "type": "souche",
+                    })
+        for time in range(4):
+            rows.append({
+                "experience": experience, "temps_h": time + experiment_number / 10,
+                "souche": "Blanc", "Groupe": group, "replicat": 1,
+                "sample_header": f"exp{experiment_number}|blank", "puits": "H12",
+                "DO_brute": .01, "Lum_brute": 1.0, "type": "blanc",
+            })
+
+    complete = run_complete_analysis(
+        pd.DataFrame(rows), consecutive_points=3, growth_window_points=3
+    )
+    metrics = complete.kinetics.series_metrics
+    assert metrics["experience"].nunique() == 3
+    assert all(
+        set(group["experience"]) == set(experiences)
+        for _, group in metrics.groupby("souche")
+    )
+
+    conditions = directional_condition_options(metrics)
+    p0 = conditions["P0 · BM2"]
+    d21 = conditions["PspeD2-1A · BM2"]
+    d23 = conditions["PspeD2-3B · BM2"]
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", compare_media=True,
+        directional_comparisons=((d21, p0), (d23, p0), (d21, d23)),
+    )
+    biological = figure._luxplate_statistical_diagnostics[0]["biological_rows"]
+    assert biological["experience"].nunique() == 3
+    assert repr(biological.iloc[0]["_comparison"]).endswith("\\x00BM2'")
+    assert figure._luxplate_statistics["n_pairs"].tolist() == [3, 3, 3]
+    plt.close(figure)

@@ -89,6 +89,30 @@ def test_experiments_are_strictly_separate_and_inputs_unchanged():
     pdt.assert_frame_equal(data, original)
 
 
+def test_workbook_experience_names_preserve_all_runs_with_shifted_time_ranges():
+    """Legacy uploads use ``experience``, not ``experience_id``."""
+    names = (
+        "260403_BM2_testsScreening",
+        "070826_BM2_LB",
+        "140826_BM2_LB_Rep3",
+    )
+    runs = []
+    for offset, name in enumerate(names):
+        run = kinetic_table(header=f"exp{offset + 1}|S1_A1")
+        run = run.drop(columns="experience_id")
+        run["experience"] = name
+        run["Groupe"] = f"exp{offset + 1}|BM2"
+        # Real workbooks need not have identical absolute acquisition times.
+        run["temps_h"] += offset / 10
+        runs.append(run)
+
+    result = run_kinetics(pd.concat(runs, ignore_index=True))
+
+    assert result.rejected_series.empty
+    assert result.series_metrics["experience"].nunique() == 3
+    assert set(result.series_metrics["experience"]) == set(names)
+
+
 def test_normalized_output_integrates_with_kinetics():
     from luxplate.blanks import run_blank_correction
     from luxplate.normalization import run_normalization

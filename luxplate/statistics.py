@@ -23,6 +23,23 @@ RESULT_COLUMNS = [
 ]
 
 
+def _paired_value_table(
+    biological: pd.DataFrame, ids: list[str], condition: str, value: str,
+) -> pd.DataFrame:
+    """Pivot values without grouping NUL-delimited condition strings.
+
+    pandas' hash grouping treats NUL as a C-string terminator in some code
+    paths.  Group each exact condition subset separately so ``A\0M1`` and
+    ``A\0M2`` can never collapse into the same pivot column.
+    """
+    columns = []
+    for item in dict.fromkeys(biological[condition].astype(str)):
+        selected = biological.loc[biological[condition].astype(str).eq(item)]
+        series = selected.groupby(ids, dropna=False)[value].mean().rename(item)
+        columns.append(series)
+    return pd.concat(columns, axis=1) if columns else pd.DataFrame()
+
+
 def directional_test_diagnostics(
     biological: pd.DataFrame, *, value: str, condition: str = "souche",
     identity: tuple[str, ...] = ("experience_id", "experience", "biological_replicate_id"),
@@ -39,9 +56,7 @@ def directional_test_diagnostics(
     ids = ids or [column for column in ("Groupe",) if column in biological]
     pivot_columns: list[object] = []
     if ids and condition in biological and value in biological:
-        pivot_columns = list(biological.pivot_table(
-            index=ids, columns=condition, values=value, aggfunc="mean"
-        ).columns)
+        pivot_columns = list(_paired_value_table(biological, ids, condition, value).columns)
 
     unique_values = {
         column: list(pd.unique(biological[column].dropna())) if column in biological else []
@@ -49,7 +64,8 @@ def directional_test_diagnostics(
     }
     row_columns = [
         column for column in
-        ("experience", "experience_id", "souche", "Groupe", "lum_norm_peak", "lum_norm_auc")
+        ("experience", "experience_id", "souche", "Groupe", "_comparison",
+         "lum_norm_peak", "lum_norm_auc")
         if column in biological
     ]
     target = biological.iloc[0:0][row_columns].copy()
@@ -143,7 +159,7 @@ def paired_directional_t_tests(
     if not comparisons or not ids or condition not in biological or value not in biological:
         return pd.DataFrame(columns=RESULT_COLUMNS)
 
-    table = biological.pivot_table(index=ids, columns=condition, values=value, aggfunc="mean")
+    table = _paired_value_table(biological, ids, condition, value)
     available = list(table.columns)
     canonical_available: dict[str, list[object]] = {}
     for item in available:
