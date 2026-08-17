@@ -6,7 +6,8 @@ import pandas as pd
 import pytest
 from matplotlib.ticker import FuncFormatter
 
-from luxplate.plotting import (_aligned_biological_summary, build_guided_corrected_figures,
+from luxplate.plotting import (_aligned_biological_summary, _comparison_identifiers,
+                               build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
                                build_publication_figures, collect_publication_statistics,
                                directional_condition_options,
@@ -32,6 +33,14 @@ def test_directional_condition_options_exposes_each_box_once():
         "P0 · SCFM2 > PspeD · SCFM2": ("P0-lux\0SCFM2", "PspeD-lux\0SCFM2"),
         "PspeD · SCFM2 > P0 · SCFM2": ("PspeD-lux\0SCFM2", "P0-lux\0SCFM2"),
     }
+
+
+def test_comparison_identifier_repr_contains_the_real_nul_separator():
+    identifiers = _comparison_identifiers(
+        pd.Series(["14.1Ac attB::PspeD2-1A-lux"]), pd.Series(["BM2"])
+    )
+
+    assert repr(identifiers.iloc[0]) == "'14.1Ac attB::PspeD2-1A-lux\\x00BM2'"
 
 
 def test_collect_publication_statistics_makes_one_visible_table():

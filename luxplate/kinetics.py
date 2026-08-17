@@ -170,7 +170,10 @@ def calculate_luminescence_metrics(
     lum = pd.to_numeric(series["Lum_corr"], errors="coerce").to_numpy(float)
     start = float(np.nanmin(time)) if window_start_h is None else float(window_start_h)
     end = float(np.nanmax(time)) if window_end_h is None else float(window_end_h)
-    common = np.isfinite(time) & np.isfinite(od) & np.isfinite(lum) & (time >= start) & (time <= end)
+    in_window = ((time > start) | np.isclose(time, start)) & (
+        (time < end) | np.isclose(time, end)
+    )
+    common = np.isfinite(time) & np.isfinite(od) & np.isfinite(lum) & in_window
     auc_time, auc_od, auc_lum = time[common], od[common], lum[common]
     od_auc = calculate_auc(auc_time, auc_od)
     lum_auc = calculate_auc(auc_time, auc_lum)
@@ -198,22 +201,35 @@ def _series_group_columns(data: pd.DataFrame) -> list[str]:
     return columns
 
 
-def _common_auc_windows(strains: pd.DataFrame) -> dict[object, tuple[float, float]]:
+def _experiment_identity_column(data: pd.DataFrame) -> str | None:
+    """Return the first populated independent-experiment identifier."""
+    for column in ("experience_id", "experience"):
+        if column in data and data[column].notna().any():
+            return column
+    return None
+
+
+def _common_auc_windows(
+    strains: pd.DataFrame,
+) -> tuple[str | None, dict[object, tuple[float, float]]]:
     """Return equal-duration AUC windows anchored at each experiment's first time.
 
     The common duration is the longest duration supported by every experiment:
     the complete acquisition span of the shortest experiment. With no
-    ``experience_id``, the sole dataset's complete span is used.
+    ``experience_id``, the uploaded workbook name stored in legacy
+    ``experience`` is used.  Without either identity, the sole dataset's
+    complete span is used.
     """
-    if "experience_id" in strains:
-        bounds = strains.groupby("experience_id", dropna=False)["temps_h"].agg(["min", "max"])
+    identity_column = _experiment_identity_column(strains)
+    if identity_column is not None:
+        bounds = strains.groupby(identity_column, dropna=False)["temps_h"].agg(["min", "max"])
     else:
         bounds = pd.DataFrame(
             {"min": [strains["temps_h"].min()], "max": [strains["temps_h"].max()]},
             index=[None],
         )
     common_duration = float((bounds["max"] - bounds["min"]).min())
-    return {
+    return identity_column, {
         experience: (float(row["min"]), float(row["min"] + common_duration))
         for experience, row in bounds.iterrows()
     }
@@ -226,10 +242,10 @@ def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
         raise ValueError("minimum_auc_points doit être un entier supérieur ou égal à 2.")
     metrics, rejected, warnings = [], [], []
     strains = data.loc[data["type"].eq("souche")] if "type" in data else data
-    auc_windows = _common_auc_windows(strains)
+    auc_identity, auc_windows = _common_auc_windows(strains)
     for _, series in strains.groupby(_series_group_columns(data), dropna=False, sort=False):
         identity = {column: series[column].iloc[0] for column in IDENTITY_COLUMNS if column in series}
-        window_start, window_end = auc_windows[identity.get("experience_id")]
+        window_start, window_end = auc_windows[identity.get(auc_identity) if auc_identity else None]
         if series["temps_h"].duplicated().any():
             warnings.append({**identity, "code": "duplicate_time",
                 "message": "Temps dupliqué : les métriques globales sont conservées, aucune fenêtre ne traverse le doublon."})

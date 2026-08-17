@@ -114,6 +114,25 @@ def _medium_label(value: object) -> str:
     return match.group(1).strip() if match else label
 
 
+def _comparison_identifiers(reporters: pd.Series, media: pd.Series) -> pd.Series:
+    """Join condition components while retaining a real NUL delimiter.
+
+    Keeping this construction in one place prevents display-oriented cleanup
+    from silently turning two distinct components into one ambiguous string.
+    The explicit representation check also makes a lost delimiter fail at the
+    point where it is introduced, rather than later as an unmatched test.
+    """
+    # pandas' vectorized ``str.cat(..., sep="\0")`` silently drops the NUL
+    # separator, so build the scalar Python strings explicitly.
+    identifiers = pd.Series(
+        [f"{reporter}\0{medium}" for reporter, medium in zip(reporters, media)],
+        index=reporters.index,
+        dtype=object,
+    )
+    assert all("\\x00" in repr(value) for value in identifiers)
+    return identifiers
+
+
 def directional_condition_options(data: pd.DataFrame) -> dict[str, str]:
     """Return the compact UI label and internal id of each boxplot condition.
 
@@ -127,7 +146,7 @@ def directional_condition_options(data: pd.DataFrame) -> dict[str, str]:
         zip(data["souche"].astype(str), data["Groupe"].map(_medium_label))
     ))
     return {
-        f"{_display_strain(strain)} · {medium}": strain + "\0" + medium
+        f"{_display_strain(strain)} · {medium}": f"{strain}\0{medium}"
         for strain, medium in conditions
     }
 
@@ -516,7 +535,6 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
             for index, item in enumerate(conditions)
         }
     rng = np.random.default_rng(seed)
-    summaries = biological.groupby(condition, sort=False)[metric].agg(["mean", "std"])
     for condition_index, item in enumerate(conditions):
         raw = technical.loc[technical[condition].astype(str).eq(item), metric].to_numpy(float)
         values = biological.loc[biological[condition].astype(str).eq(item), metric].to_numpy(float)
@@ -530,7 +548,7 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
             boxprops={"facecolor": color, "alpha": .20, "edgecolor": color},
             whiskerprops={"color": color}, capprops={"color": color})
         highest = float(np.nanmax(np.concatenate([values, raw])))
-        axis.annotate(f"{float(summaries.loc[item, 'mean']):.3g}", (condition_index, highest),
+        axis.annotate(f"{float(np.mean(values)):.3g}", (condition_index, highest),
                       xytext=(0, 7), ha="center", va="bottom", textcoords="offset points",
                       fontsize=7, color=color)
         axis.plot(condition_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
@@ -668,15 +686,19 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     if compare_media:
         biological["_reporter"] = biological["souche"].astype(str)
         biological["_medium"] = biological["Groupe"].map(_medium_label)
-        biological["_comparison"] = (biological["_reporter"] + "\0" + biological["_medium"])
+        biological["_comparison"] = _comparison_identifiers(
+            biological["_reporter"], biological["_medium"]
+        )
         diagnostic_biological["_reporter"] = diagnostic_biological["souche"].astype(str)
         diagnostic_biological["_medium"] = diagnostic_biological["Groupe"].map(_medium_label)
-        diagnostic_biological["_comparison"] = (
-            diagnostic_biological["_reporter"] + "\0" + diagnostic_biological["_medium"]
+        diagnostic_biological["_comparison"] = _comparison_identifiers(
+            diagnostic_biological["_reporter"], diagnostic_biological["_medium"]
         )
         technical["_reporter"] = technical["souche"].astype(str)
         technical["_medium"] = technical["Groupe"].map(_medium_label)
-        technical["_comparison"] = technical["_reporter"] + "\0" + technical["_medium"]
+        technical["_comparison"] = _comparison_identifiers(
+            technical["_reporter"], technical["_medium"]
+        )
         condition = "_comparison"
         panels = [None]
     else:
