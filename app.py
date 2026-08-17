@@ -213,6 +213,13 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
         help="Les figures et les tests ne sont recalculés qu'après cette validation.",
     ):
         st.session_state[validated_key] = list(stack)
+        # Matplotlib figures are mutable objects.  Keeping an older serialized
+        # figure in Streamlit's data cache can therefore leave the graph shown
+        # before validation on screen even though Session State already
+        # contains the newly validated contrasts.  Explicitly invalidate the
+        # gallery here: the rerun below then rebuilds every selected metric
+        # figure, including its brackets and significance labels.
+        cached_publication_figures.clear()
         st.rerun()
     if pending_changes:
         st.info(
