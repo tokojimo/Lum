@@ -9,7 +9,13 @@ import pandas as pd
 
 
 REQUIRED_COLUMNS = ("temps_h", "souche", "DO_corr", "Lum_corr", "Lum_norm")
-IDENTITY_COLUMNS = ("experience_id", "souche", "Groupe", "sample_header", "puits", "replicat")
+# ``combine_kinetic_tables`` records the uploaded workbook in ``experience``.
+# Keep that legacy-but-real biological identity all the way into the metric
+# table; otherwise only ``replicat`` survives and technical well numbers can be
+# mistaken for independent experiments by the statistical figures.
+IDENTITY_COLUMNS = (
+    "experience_id", "experience", "souche", "Groupe", "sample_header", "puits", "replicat",
+)
 METRIC_COLUMNS = (
     "od_max", "od_max_time_h", "od_auc", "max_growth_rate_per_h",
     "max_growth_rate_start_h", "max_growth_rate_end_h", "doubling_time_h",
@@ -29,7 +35,7 @@ REJECTED_SERIES_COLUMNS = (*IDENTITY_COLUMNS, "reason", "n_points_total")
 WARNING_COLUMNS = (*IDENTITY_COLUMNS, "code", "message")
 SUMMARY_COLUMNS = ("metric", "value")
 TECHNICAL_SUMMARY_COLUMNS = (
-    "experience_id", "souche", "Groupe", "replicat", "n_technical_series",
+    "experience_id", "experience", "souche", "Groupe", "replicat", "n_technical_series",
     *(name for metric in METRIC_COLUMNS for name in (f"{metric}_mean", f"{metric}_sd", f"{metric}_n")),
 )
 
@@ -267,7 +273,8 @@ def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
 
 def summarize_technical_replicates(series_metrics: pd.DataFrame) -> pd.DataFrame:
     """Summarize technical wells, retaining biological replicate identity."""
-    group_columns = [column for column in ("experience_id", "souche", "Groupe", "replicat")
+    group_columns = [column for column in
+                     ("experience_id", "experience", "souche", "Groupe", "replicat")
                      if column in series_metrics]
     rows = []
     for keys, group in series_metrics.groupby(group_columns, dropna=False, sort=False):
