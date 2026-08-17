@@ -29,6 +29,21 @@ def _canonical_condition(value: object) -> str:
     normalized = []
     for index, part in enumerate(parts):
         text = " ".join(part.strip().split())
+        if index == 0:
+            # Guided comparisons may have been selected from imported plate
+            # labels (``14.1Ac attB::PspeD2-1A-lux``), while an already-built
+            # metric table contains the reporter construct only
+            # (``PspeD2-1A-lux``).  Both name the same plotted reporter.  Keep
+            # arbitrary strain names intact, but remove the well-known host /
+            # integration prefix and MiniCTX wrapper when they are present.
+            _prefix, separator, construct = text.rpartition("::")
+            if separator:
+                text = construct.strip()
+            wrapped = re.fullmatch(r"MiniCTXlux\s*\((.+)\)", text,
+                                   flags=re.IGNORECASE)
+            if wrapped:
+                text = wrapped.group(1).strip()
+            text = re.sub(r"-lux$", "-lux", text, flags=re.IGNORECASE)
         if index == 1:
             text = re.sub(
                 r"^exp(?:eriment)?\s*\d+\s*\|\s*", "", text,
