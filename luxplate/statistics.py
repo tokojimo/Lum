@@ -23,6 +23,64 @@ RESULT_COLUMNS = [
 ]
 
 
+def directional_test_diagnostics(
+    biological: pd.DataFrame, *, value: str, condition: str = "souche",
+    identity: tuple[str, ...] = ("experience_id", "experience", "biological_replicate_id"),
+    comparisons: tuple[tuple[str, str], ...] = (),
+) -> list[dict[str, object]]:
+    """Capture the exact inputs presented to the directional test.
+
+    This intentionally performs no matching or statistical inference.  It is
+    an audit aid for the Streamlit interface, built from the same biological
+    table, condition column, and identity candidates as the real test.
+    """
+    ids = [column for column in identity
+           if column in biological and biological[column].notna().any()]
+    ids = ids or [column for column in ("Groupe",) if column in biological]
+    pivot_columns: list[object] = []
+    if ids and condition in biological and value in biological:
+        pivot_columns = list(biological.pivot_table(
+            index=ids, columns=condition, values=value, aggfunc="mean"
+        ).columns)
+
+    unique_values = {
+        column: list(pd.unique(biological[column].dropna())) if column in biological else []
+        for column in ("souche", "Groupe", "_comparison")
+    }
+    row_columns = [
+        column for column in
+        ("experience", "experience_id", "souche", "Groupe", "lum_norm_peak", "lum_norm_auc")
+        if column in biological
+    ]
+    target = biological.iloc[0:0][row_columns].copy()
+    if "souche" in biological and "Groupe" in biological:
+        reporter = biological["souche"].astype(str).map(
+            lambda item: _canonical_condition(item).split("\0", 1)[0]
+        )
+        medium = biological["Groupe"].astype(str).map(
+            lambda item: _canonical_condition("x\0" + item).split("\0", 1)[-1]
+        )
+        wanted = {"p0-lux", "p0", "psped2-1a-lux", "psped2-1a",
+                  "psped2-3b-lux", "psped2-3b"}
+        target = biological.loc[reporter.isin(wanted) & medium.eq("bm2"), row_columns].copy()
+
+    return [{
+        "requested_left": requested_left,
+        "canonical_left": _canonical_condition(requested_left),
+        "requested_right": requested_right,
+        "canonical_right": _canonical_condition(requested_right),
+        "condition_column": condition,
+        "identity_columns": list(ids),
+        "pivot_columns": [
+            {"value": column, "repr": repr(column),
+             "canonical": _canonical_condition(column)}
+            for column in pivot_columns
+        ],
+        "unique_values": unique_values,
+        "biological_rows": target,
+    } for requested_left, requested_right in comparisons]
+
+
 def _canonical_condition(value: object) -> str:
     """Normalize a UI/figure condition without changing its scientific identity."""
     parts = str(value).split("\0", 1)

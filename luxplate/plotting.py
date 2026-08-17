@@ -16,7 +16,7 @@ from matplotlib.ticker import FuncFormatter
 from matplotlib.transforms import blended_transform_factory
 
 from luxplate.kinetics import run_kinetics
-from luxplate.statistics import paired_directional_t_tests
+from luxplate.statistics import directional_test_diagnostics, paired_directional_t_tests
 
 
 PUBLICATION_COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000")
@@ -656,6 +656,11 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         biological_ids = ["replicat"]
     group_columns = ["souche", "Groupe", *biological_ids]
     biological = technical.groupby(group_columns, dropna=False, sort=False)[metric].mean().reset_index()
+    diagnostic_metrics = [column for column in ("lum_norm_peak", "lum_norm_auc")
+                          if column in metrics]
+    diagnostic_biological = metrics.groupby(
+        group_columns, dropna=False, sort=False
+    )[diagnostic_metrics].mean().reset_index() if diagnostic_metrics else biological.copy()
     panels = ([None] if group_by is None else
               list(dict.fromkeys(biological[group_by].dropna().astype(str))))
     if not panels:
@@ -664,6 +669,11 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         biological["_reporter"] = biological["souche"].astype(str)
         biological["_medium"] = biological["Groupe"].map(_medium_label)
         biological["_comparison"] = (biological["_reporter"] + "\0" + biological["_medium"])
+        diagnostic_biological["_reporter"] = diagnostic_biological["souche"].astype(str)
+        diagnostic_biological["_medium"] = diagnostic_biological["Groupe"].map(_medium_label)
+        diagnostic_biological["_comparison"] = (
+            diagnostic_biological["_reporter"] + "\0" + diagnostic_biological["_medium"]
+        )
         technical["_reporter"] = technical["souche"].astype(str)
         technical["_medium"] = technical["Groupe"].map(_medium_label)
         technical["_comparison"] = technical["_reporter"] + "\0" + technical["_medium"]
@@ -678,9 +688,14 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     width = max(6, 1.35 * condition_count) if compare_media else max(6, 4.3 * ncols)
     figure, axes = plt.subplots(nrows, ncols, figsize=(width, (4.5 + extra_height) * nrows), squeeze=False)
     all_statistics = []
+    all_diagnostics = []
     for index, panel in enumerate(panels):
         panel_technical = technical if panel is None else technical.loc[technical[group_by].astype(str).eq(panel)]
         panel_biological = biological if panel is None else biological.loc[biological[group_by].astype(str).eq(panel)]
+        panel_diagnostic_biological = (
+            diagnostic_biological if panel is None else
+            diagnostic_biological.loc[diagnostic_biological[group_by].astype(str).eq(panel)]
+        )
         panel_title = (title or metric) if panel is None else _display_panel(panel)
         statistics = _draw_metric_panel(axes.flat[index], panel_technical, panel_biological,
             metric=metric, condition=condition, y_scale=effective_scale,
@@ -690,6 +705,17 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         if panel is not None:
             statistics = statistics.assign(panel=panel)
         all_statistics.append(statistics)
+        diagnostic_identity = biological_ids or (
+            ["Groupe"] if condition == "souche" else ["souche"]
+        )
+        diagnostics = directional_test_diagnostics(
+            panel_diagnostic_biological, value=metric, condition=condition,
+            identity=tuple(diagnostic_identity), comparisons=directional_comparisons,
+        )
+        for diagnostic in diagnostics:
+            diagnostic["panel"] = panel
+            diagnostic["metric"] = metric
+        all_diagnostics.extend(diagnostics)
     for axis in axes.flat[len(panels):]:
         axis.remove()
     axes.flat[0].legend(handles=[
@@ -702,6 +728,7 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     if group_by is not None:
         figure.suptitle(title or metric, fontweight="bold", y=.995)
     figure._luxplate_statistics = pd.concat(all_statistics, ignore_index=True) if all_statistics else pd.DataFrame()
+    figure._luxplate_statistical_diagnostics = all_diagnostics
     figure.tight_layout(rect=(0, 0, 1, .96) if group_by is not None and not compare_media else None)
     return figure
 
