@@ -13,6 +13,7 @@ from luxplate.plotting import (_aligned_biological_summary, build_guided_correct
                                directional_comparison_options, metric_fold_change_vs_control,
                                plot_kinetics, plot_metric_points, plot_mixed_panels,
                                plot_publication_panels)
+from luxplate.statistics import _canonical_condition
 from test_workflow import workflow_table
 
 
@@ -531,6 +532,66 @@ def test_bm2_auc_three_validated_hypotheses_produce_rows_and_brackets():
         if len(line.get_xdata()) == 4 and np.asarray(line.get_ydata()).max() < 1
     ]
     assert len(bracket_lines) == 3
+    plt.close(figure)
+
+
+def test_real_ui_nul_conditions_keep_three_workbook_biological_pairs():
+    """Exercise raw UI identifiers through the complete metric statistics path."""
+    full_strains = (
+        "14.1Ac attB::P0-lux",
+        "14.1Ac attB::PspeD2-1A-lux",
+        "14.1Ac attB::PspeD2-3B-lux",
+    )
+    raw = pd.DataFrame([
+        {"souche": strain, "Groupe": f"exp{bio}|BM2"}
+        for bio in range(1, 4) for strain in full_strains
+    ])
+    ui_conditions = directional_condition_options(raw)
+    p0 = ui_conditions["P0 · BM2"]
+    d21 = ui_conditions["PspeD2-1A · BM2"]
+    d23 = ui_conditions["PspeD2-3B · BM2"]
+    hypotheses = ((d21, d23), (d21, p0), (d23, p0))
+    assert all("\0" in condition for pair in hypotheses for condition in pair)
+
+    # The uploaded workbook name is the biological unit.  Replicate and well
+    # values deliberately repeat in every workbook and are technical only.
+    metrics = pd.DataFrame([
+        {
+            "souche": strain,
+            "Groupe": f"exp{bio}|BM2",
+            "experience": experience,
+            "replicat": technical,
+            "puits": f"{chr(65 + technical)}0{bio}",
+            "lum_norm_auc": (10 + strain_index * 5 + bio) * (1 + technical / 100),
+        }
+        for bio, experience in enumerate((
+            "260403_BM2_testsScreening", "070826_BM2_LB", "140826_BM2_LB_Rep3"
+        ), start=1)
+        for strain_index, strain in enumerate(full_strains)
+        for technical in range(1, 4)
+    ])
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", compare_media=True,
+        directional_comparisons=hypotheses,
+    )
+    result = figure._luxplate_statistics
+
+    # On regression, expose every exact value involved rather than hiding the
+    # NUL separator in an ordinary assertion diff or CSV renderer.
+    pivot_columns = list(dict.fromkeys(
+        metrics["souche"].astype(str) + "\0" + metrics["Groupe"].map(
+            lambda group: group.split("|", 1)[-1]
+        )
+    ))
+    diagnostic = "\n".join([
+        f"requested left = {d21!r}",
+        f"canonical left = {_canonical_condition(d21)!r}",
+        "pivot columns:",
+        *(f"  {column!r} -> {_canonical_condition(column)!r}" for column in pivot_columns),
+    ])
+    assert result["n_pairs"].tolist() == [3, 3, 3], diagnostic
+    assert result["calculation_status"].eq("calculé").all(), diagnostic
+    assert result["pairing_columns"].eq("experience").all(), diagnostic
     plt.close(figure)
 
 

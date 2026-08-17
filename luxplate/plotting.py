@@ -722,8 +722,10 @@ def metric_fold_change_vs_control(metrics: pd.DataFrame, *, metric: str,
     work[metric] = pd.to_numeric(work[metric], errors="coerce").replace([np.inf, -np.inf], np.nan)
     work = work.loc[work[metric].notna()]
     work["Milieu"] = work["Groupe"].map(_medium_label)
-    identities = [column for column in ("experience_id", "replicat")
+    identities = [column for column in ("experience_id", "experience")
                   if column in work and work[column].notna().any()]
+    if not identities and "replicat" in work and work["replicat"].notna().any():
+        identities = ["replicat"]
     grouping = ["souche", "Milieu", *identities]
     biological = work.groupby(grouping, dropna=False, sort=False)[metric].mean().reset_index()
     exact_control = biological["souche"].astype(str).str.casefold().eq(control.casefold())
