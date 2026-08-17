@@ -98,19 +98,25 @@ def cached_publication_figures(
 
 
 def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tuple[str, str], ...]:
-    """Render manual and automatic hypothesis builders backed by a persistent stack."""
+    """Build a hypothesis stack without running it until explicit validation."""
     conditions = directional_condition_options(data)
     if len(conditions) < 2:
         st.info("Au moins deux boîtes sont nécessaires pour définir une comparaison.")
         return ()
 
     stack_key = f"{key}_stack"
+    validated_key = f"{key}_validated"
     valid_ids = set(conditions.values())
     stack = [tuple(pair) for pair in st.session_state.get(stack_key, [])
              if len(pair) == 2 and pair[0] in valid_ids and pair[1] in valid_ids and pair[0] != pair[1]]
     # Preserve insertion order while removing hypotheses added through more than one shortcut.
     stack = list(dict.fromkeys(stack))
     st.session_state[stack_key] = stack
+    validated = [tuple(pair) for pair in st.session_state.get(validated_key, [])
+                 if len(pair) == 2 and pair[0] in valid_ids and pair[1] in valid_ids
+                 and pair[0] != pair[1]]
+    validated = list(dict.fromkeys(validated))
+    st.session_state[validated_key] = validated
 
     st.markdown("**Ajout manuel**")
     columns = st.columns(2)
@@ -193,7 +199,23 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
         if st.button("Vider la pile", key=f"{key}_clear"):
             st.session_state[stack_key] = []
             st.rerun()
-    return tuple(stack)
+
+    pending_changes = stack != validated
+    if st.button(
+        "Valider les hypothèses et lancer les tests",
+        key=f"{key}_validate", type="primary", disabled=not stack,
+        help="Les figures et les tests ne sont recalculés qu'après cette validation.",
+    ):
+        st.session_state[validated_key] = list(stack)
+        st.rerun()
+    if pending_changes:
+        st.info(
+            "La pile a été modifiée. Validez-la pour appliquer ces hypothèses aux tests ; "
+            "les résultats affichés restent inchangés jusque-là."
+        )
+    elif validated:
+        st.success(f"{len(validated)} hypothèse(s) validée(s) et appliquée(s).")
+    return tuple(validated)
 
 
 def render_guided_results(complete, base: str) -> None:
@@ -265,6 +287,17 @@ def render_guided_results(complete, base: str) -> None:
             for guided_name, guided_figure in guided_figures:
                 st.subheader(guided_name.replace("_", " ").title())
                 st.pyplot(guided_figure, use_container_width=True)
+                statistics = getattr(guided_figure, "_luxplate_statistics", pd.DataFrame())
+                if not statistics.empty:
+                    st.dataframe(
+                        statistics[["condition_1", "condition_2", "n_pairs", "p_raw",
+                                    "significance"]].rename(columns={
+                            "condition_1": "Condition A", "condition_2": "Condition B",
+                            "n_pairs": "Paires biologiques", "p_raw": "p-value",
+                            "significance": "Résultat",
+                        }),
+                        use_container_width=True, hide_index=True,
+                    )
             st.caption(
                 "Les temps séparés de moins d'une minute sont alignés avant le tracé. Les puits "
                 "techniques sont moyennés dans chaque réplicat biologique, puis les courbes montrent "

@@ -22,6 +22,8 @@ RESULT_COLUMNS = [
 
 
 def _significance(p_value: float) -> str:
+    if not np.isfinite(p_value):
+        return "NA"
     if p_value < .0001:
         return "****"
     if p_value < .001:
@@ -58,16 +60,17 @@ def paired_directional_t_tests(
             continue
         pairs = table[[left, right]].replace([np.inf, -np.inf], np.nan).dropna()
         pairs = pairs.loc[pairs[left].gt(0) & pairs[right].gt(0)]
-        if len(pairs) < 3:
-            continue
-        result = ttest_rel(
-            np.log10(pairs[left].to_numpy(float)),
-            np.log10(pairs[right].to_numpy(float)),
-            alternative="greater",
-        )
-        raw = float(result.pvalue)
-        if not np.isfinite(raw):
-            raw = 1.0
+        enough_pairs = len(pairs) >= 3
+        if enough_pairs:
+            test_result = ttest_rel(
+                np.log10(pairs[left].to_numpy(float)),
+                np.log10(pairs[right].to_numpy(float)),
+                alternative="greater",
+            )
+            statistic = float(test_result.statistic)
+            raw = float(test_result.pvalue)
+        else:
+            statistic = raw = float("nan")
         paired_records = []
         for pair_identity, pair_values in pairs.iterrows():
             identity_values = pair_identity if isinstance(pair_identity, tuple) else (pair_identity,)
@@ -83,10 +86,11 @@ def paired_directional_t_tests(
             "test": "paired t-test", "alternative": "condition_1 > condition_2",
             "transformation": "log10", "value_column": value,
             "pairing_columns": "|".join(ids), "n_pairs": len(pairs),
-            "statistic_t": float(result.statistic), "degrees_freedom": len(pairs) - 1,
+            "statistic_t": statistic,
+            "degrees_freedom": len(pairs) - 1 if enough_pairs else float("nan"),
             "mean_log10_difference": float(
                 (np.log10(pairs[left]) - np.log10(pairs[right])).mean()
-            ),
+            ) if len(pairs) else float("nan"),
             "p_raw": raw, "alpha": .05,
             "paired_values_json": json.dumps(paired_records, ensure_ascii=False, default=str),
         })
@@ -94,10 +98,11 @@ def paired_directional_t_tests(
     result = pd.DataFrame(rows)
     if result.empty:
         return pd.DataFrame(columns=RESULT_COLUMNS)
-    order = result["p_raw"].sort_values().index
+    estimable = result["p_raw"].dropna()
+    order = estimable.sort_values().index
     adjusted = pd.Series(index=result.index, dtype=float)
     running = 0.0
-    total = len(result)
+    total = len(estimable)
     for rank, index in enumerate(order):
         running = max(running, min(1.0, result.at[index, "p_raw"] * (total - rank)))
         adjusted.at[index] = running

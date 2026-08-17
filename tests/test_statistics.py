@@ -84,6 +84,9 @@ def test_nonpositive_values_are_excluded_and_three_pairs_are_required():
     assert comparisons.loc[0, "n_pairs"] == 3
 
     biological.loc[biological["experience_id"].eq(4) & biological["souche"].eq("control"), "value"] = 0
-    assert paired_directional_t_tests(
+    insufficient = paired_directional_t_tests(
         biological, value="value", comparisons=(("reporter", "control"),)
-    ).empty
+    )
+    assert insufficient.loc[0, "n_pairs"] == 2
+    assert np.isnan(insufficient.loc[0, "p_raw"])
+    assert insufficient.loc[0, "significance"] == "NA"

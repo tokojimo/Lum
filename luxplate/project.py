@@ -33,6 +33,7 @@ PROJECT_KEYS = (
     "guided_crosstalk",
     "guided_figure_panels", "guided_figure_lum_scale", "guided_export_dpi",
     "guided_directional_comparisons_stack",
+    "guided_directional_comparisons_validated",
 )
 
 
