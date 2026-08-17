@@ -97,9 +97,14 @@ def cached_publication_figures(
     )
 
 
-@st.fragment
 def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tuple[str, str], ...]:
-    """Build a hypothesis stack without running it until explicit validation."""
+    """Build a hypothesis stack without running it until explicit validation.
+
+    This selector deliberately participates in the full application rerun.  Its
+    return value is consumed immediately below to build the figures; a fragment
+    rerun would update the widgets and Session State while leaving that caller
+    (and therefore the figures) untouched.
+    """
     conditions = directional_condition_options(data)
     if len(conditions) < 2:
         st.info("Au moins deux boîtes sont nécessaires pour définir une comparaison.")
@@ -139,8 +144,7 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
     if st.button("Ajouter à la pile", key=f"{key}_add_manual", disabled=not selected):
         additions = [(conditions[reference_label], conditions[label]) for label in selected]
         st.session_state[stack_key] = list(dict.fromkeys([*stack, *additions]))
-        # Editing the draft stack must not rebuild and dim every result figure.
-        st.rerun(scope="fragment")
+        st.rerun()
 
     st.markdown("**Ajouts automatiques**")
     st.caption("Générez une série d'hypothèses, puis complétez-la avec les choix manuels ci-dessus.")
@@ -162,7 +166,7 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
             disabled=not same_strain,
         ):
             st.session_state[stack_key] = list(dict.fromkeys([*stack, *same_strain]))
-            st.rerun(scope="fragment")
+            st.rerun()
     else:
         st.info("Deux milieux sont nécessaires pour automatiser les comparaisons par souche.")
 
@@ -182,7 +186,7 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
             disabled=not versus_control,
         ):
             st.session_state[stack_key] = list(dict.fromkeys([*stack, *versus_control]))
-            st.rerun(scope="fragment")
+            st.rerun()
     else:
         st.info("Aucune souche P0 détectée pour générer les comparaisons au contrôle.")
 
@@ -197,10 +201,10 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
             label_column.write(f"{index + 1}. {labels_by_id[left]} > {labels_by_id[right]}")
             if remove_column.button("✕", key=f"{key}_remove_{index}", help="Retirer cette hypothèse"):
                 st.session_state[stack_key] = stack[:index] + stack[index + 1:]
-                st.rerun(scope="fragment")
+                st.rerun()
         if st.button("Vider la pile", key=f"{key}_clear"):
             st.session_state[stack_key] = []
-            st.rerun(scope="fragment")
+            st.rerun()
 
     pending_changes = stack != validated
     if st.button(
