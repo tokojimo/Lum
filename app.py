@@ -325,6 +325,51 @@ def render_guided_results(complete, base: str) -> None:
                             "Les lignes « NA » ne disposent pas des trois paires biologiques "
                             "positives requises pour calculer le test."
                         )
+                diagnostics = [
+                    (figure_name, diagnostic)
+                    for figure_name, figure in guided_figures
+                    for diagnostic in getattr(figure, "_luxplate_statistical_diagnostics", [])
+                ]
+                with st.expander("Diagnostic statistiques", expanded=False):
+                    st.caption(
+                        "Valeurs exactes transmises au test, issues des tables biologiques "
+                        "des figures (aucune correction ni substitution n'est appliquée ici)."
+                    )
+                    if not diagnostics:
+                        st.info("Aucune figure statistique sélectionnée ne fournit de diagnostic.")
+                    for index, (figure_name, diagnostic) in enumerate(diagnostics, start=1):
+                        st.markdown(
+                            f"#### {index}. {figure_name} — `{diagnostic['metric']}`"
+                        )
+                        st.markdown("**requested_left repr:**")
+                        st.code(repr(diagnostic["requested_left"]), language=None)
+                        st.markdown("**canonical(requested_left):**")
+                        st.code(diagnostic["canonical_left"], language=None)
+                        st.markdown("**requested_right repr:**")
+                        st.code(repr(diagnostic["requested_right"]), language=None)
+                        st.markdown("**canonical(requested_right):**")
+                        st.code(diagnostic["canonical_right"], language=None)
+                        st.write("**Colonne condition utilisée :**", diagnostic["condition_column"])
+                        st.write("**Colonnes identity utilisées :**", diagnostic["identity_columns"])
+                        st.markdown("**Colonnes exactes du pivot :**")
+                        st.dataframe(pd.DataFrame(diagnostic["pivot_columns"]),
+                                     use_container_width=True, hide_index=True)
+                        for column, values in diagnostic["unique_values"].items():
+                            st.markdown(f'**Valeurs uniques de biological["{column}"] :**')
+                            st.code("\n".join(repr(value) for value in values) or "<colonne absente/vide>",
+                                    language=None)
+                        st.markdown(
+                            "**Lignes biologiques P0, PspeD2-1A et PspeD2-3B en BM2 :**"
+                        )
+                        st.dataframe(diagnostic["biological_rows"],
+                                     use_container_width=True, hide_index=True)
+                        st.download_button(
+                            "Télécharger ces lignes biologiques (.csv)",
+                            diagnostic["biological_rows"].to_csv(index=False).encode("utf-8-sig"),
+                            f"diagnostic_statistiques_{index}.csv", "text/csv",
+                            key=f"guided_statistics_diagnostic_download_{index}",
+                        )
+                        st.divider()
             for guided_name, guided_figure in guided_figures:
                 st.subheader(guided_name.replace("_", " ").title())
                 st.pyplot(guided_figure, use_container_width=True)

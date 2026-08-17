@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from luxplate.statistics import paired_directional_t_tests
+from luxplate.statistics import directional_test_diagnostics, paired_directional_t_tests
 
 
 def _biological(values):
@@ -154,3 +154,31 @@ def test_unmatched_validated_condition_is_reported_with_a_reason():
     assert result.loc[0, "condition_1"] == "missing"
     assert result.loc[0, "calculation_status"] == "non calculable"
     assert "condition A introuvable" in result.loc[0, "non_calculable_reason"]
+
+
+def test_directional_diagnostics_expose_exact_runtime_identifiers():
+    biological = pd.DataFrame([
+        {"experience": f"exp{experiment}", "souche": strain,
+         "Groupe": "Experiment 2 | BM2", "_comparison": strain + "\0BM2",
+         "lum_norm_peak": value, "lum_norm_auc": value * 2}
+        for experiment in range(1, 4)
+        for strain, value in (("P0-lux", 10), ("PspeD2-1A-lux", 20), ("other", 30))
+    ])
+    requested = ("14.1Ac attB::PspeD2-1A-lux\0BM2", "14.1Ac attB::P0-lux\0BM2")
+
+    diagnostics = directional_test_diagnostics(
+        biological, value="lum_norm_peak", condition="_comparison",
+        identity=("experience",), comparisons=(requested,),
+    )
+
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic["requested_left"] == requested[0]
+    assert diagnostic["canonical_left"] == "psped2-1a-lux\0bm2"
+    assert diagnostic["condition_column"] == "_comparison"
+    assert diagnostic["identity_columns"] == ["experience"]
+    assert {item["repr"] for item in diagnostic["pivot_columns"]} >= {
+        repr("P0-lux\0BM2"), repr("PspeD2-1A-lux\0BM2")
+    }
+    assert diagnostic["unique_values"]["Groupe"] == ["Experiment 2 | BM2"]
+    assert len(diagnostic["biological_rows"]) == 6
