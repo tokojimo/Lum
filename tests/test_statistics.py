@@ -118,6 +118,30 @@ def test_conditions_are_matched_canonically_instead_of_silently_disappearing():
     assert result.loc[0, "calculation_status"] == "calculé"
 
 
+def test_real_bm2_construct_names_match_reporter_metric_columns():
+    """Regression for guided hypotheses made from full Varioskan strain names."""
+    reporters = ("P0-lux", "PspeD2-1A-lux", "PspeD2-3B-lux")
+    biological = pd.DataFrame([
+        {"experience_id": f"exp{experiment}", "condition": reporter + "\0BM2",
+         "value": value}
+        for experiment, values in enumerate(((10, 20, 15), (12, 25, 19), (9, 21, 16)), start=1)
+        for reporter, value in zip(reporters, values)
+    ])
+    full = {reporter: f"14.1Ac attB::{reporter}\0BM2" for reporter in reporters}
+
+    result = paired_directional_t_tests(
+        biological, value="value", condition="condition",
+        comparisons=((full["PspeD2-1A-lux"], full["P0-lux"]),
+                     (full["PspeD2-3B-lux"], full["P0-lux"]),
+                     (full["PspeD2-1A-lux"], full["PspeD2-3B-lux"])),
+    )
+
+    assert len(result) == 3
+    assert result["n_pairs"].eq(3).all()
+    assert result["calculation_status"].eq("calculé").all()
+    assert result["non_calculable_reason"].eq("").all()
+
+
 def test_unmatched_validated_condition_is_reported_with_a_reason():
     biological = _biological([(1, 2, 3), (2, 4, 6), (4, 9, 12)])
 
