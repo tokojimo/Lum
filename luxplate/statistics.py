@@ -7,6 +7,7 @@ every row supplied to the test represents one independent biological block.
 from __future__ import annotations
 
 import json
+import re
 
 import numpy as np
 import pandas as pd
@@ -17,8 +18,24 @@ RESULT_COLUMNS = [
     "condition_1", "condition_2", "test", "alternative", "transformation",
     "value_column", "pairing_columns", "n_pairs", "statistic_t", "degrees_freedom",
     "mean_log10_difference", "p_raw", "p_holm", "holm_family_size", "alpha",
-    "significance", "paired_values_json",
+    "significance", "calculation_status", "non_calculable_reason",
+    "paired_values_json",
 ]
+
+
+def _canonical_condition(value: object) -> str:
+    """Normalize a UI/figure condition without changing its scientific identity."""
+    parts = str(value).split("\0", 1)
+    normalized = []
+    for index, part in enumerate(parts):
+        text = " ".join(part.strip().split())
+        if index == 1:
+            text = re.sub(
+                r"^exp(?:eriment)?\s*\d+\s*\|\s*", "", text,
+                flags=re.IGNORECASE,
+            )
+        normalized.append(text.casefold())
+    return "\0".join(normalized)
 
 
 def _significance(p_value: float) -> str:
@@ -54,9 +71,35 @@ def paired_directional_t_tests(
         return pd.DataFrame(columns=RESULT_COLUMNS)
 
     table = biological.pivot_table(index=ids, columns=condition, values=value, aggfunc="mean")
+    available = list(table.columns)
+    canonical_available: dict[str, list[object]] = {}
+    for item in available:
+        canonical_available.setdefault(_canonical_condition(item), []).append(item)
     rows: list[dict[str, object]] = []
-    for left, right in comparisons:
-        if left not in table or right not in table or left == right:
+    for requested_left, requested_right in comparisons:
+        left_matches = canonical_available.get(_canonical_condition(requested_left), [])
+        right_matches = canonical_available.get(_canonical_condition(requested_right), [])
+        left = requested_left if requested_left in table else (left_matches[0] if len(left_matches) == 1 else None)
+        right = requested_right if requested_right in table else (right_matches[0] if len(right_matches) == 1 else None)
+        if left is None or right is None or left == right:
+            missing = []
+            if left is None:
+                missing.append(f"condition A introuvable ({requested_left})")
+            if right is None:
+                missing.append(f"condition B introuvable ({requested_right})")
+            if left is not None and left == right:
+                missing.append("les deux conditions correspondent à la même boîte")
+            rows.append({
+                "condition_1": requested_left, "condition_2": requested_right,
+                "test": "paired t-test", "alternative": "condition_1 > condition_2",
+                "transformation": "log10", "value_column": value,
+                "pairing_columns": "|".join(ids), "n_pairs": 0,
+                "statistic_t": np.nan, "degrees_freedom": np.nan,
+                "mean_log10_difference": np.nan, "p_raw": np.nan, "alpha": .05,
+                "significance": "NA", "calculation_status": "non calculable",
+                "non_calculable_reason": "; ".join(missing),
+                "paired_values_json": "[]",
+            })
             continue
         pairs = table[[left, right]].replace([np.inf, -np.inf], np.nan).dropna()
         pairs = pairs.loc[pairs[left].gt(0) & pairs[right].gt(0)]
@@ -92,6 +135,10 @@ def paired_directional_t_tests(
                 (np.log10(pairs[left]) - np.log10(pairs[right])).mean()
             ) if len(pairs) else float("nan"),
             "p_raw": raw, "alpha": .05,
+            "calculation_status": "calculé" if enough_pairs else "non calculable",
+            "non_calculable_reason": "" if enough_pairs else (
+                f"moins de 3 paires biologiques positives ({len(pairs)} disponible(s))"
+            ),
             "paired_values_json": json.dumps(paired_records, ensure_ascii=False, default=str),
         })
 
