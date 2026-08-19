@@ -277,18 +277,23 @@ def render_guided_results(complete, base: str) -> None:
             default=list(guided_family_labels), key="guided_figure_families",
         )
         st.markdown("#### Affichage")
-        guided_options = st.columns(3)
+        guided_options = st.columns(4)
         guided_panel_label = guided_options[0].selectbox(
             "Organisation des panneaux", ["Panneaux par milieu", "Panneaux par souche"],
             key="guided_figure_panels",
         )
         guided_lum_label = guided_options[1].selectbox(
-            "Échelle de l’axe Y", ["Linéaire", "Logarithmique (base 10)"],
-            index=1, key="guided_figure_lum_scale",
+            "Échelle Y des courbes", ["Linéaire", "Logarithmique (base 10)"],
+            index=0, key="guided_figure_lum_scale",
             help=("Ce réglage modifie uniquement l’affichage de la figure. "
                   "Il ne transforme pas les valeurs utilisées pour les tests statistiques."),
         )
-        guided_show_technical = guided_options[2].checkbox(
+        guided_metric_label = guided_options[2].selectbox(
+            "Échelle Y des boîtes à moustaches", ["Linéaire", "Logarithmique (base 10)"],
+            index=1, key="guided_figure_metric_scale",
+            help=("Ce réglage graphique est indépendant de la transformation statistique."),
+        )
+        guided_show_technical = guided_options[3].checkbox(
             "Afficher les réplicats techniques",
             value=True,
             key="guided_show_technical_replicates",
@@ -334,7 +339,7 @@ def render_guided_results(complete, base: str) -> None:
                 families=tuple(guided_family_labels[label] for label in guided_figure_labels),
                 panel_by="Groupe" if guided_panel_label.endswith("milieu") else "souche",
                 lum_scale="log" if guided_lum_label == "Logarithmique (base 10)" else "linear",
-                metric_scale="log" if guided_lum_label == "Logarithmique (base 10)" else "linear",
+                metric_scale="log" if guided_metric_label == "Logarithmique (base 10)" else "linear",
                 directional_comparisons=guided_selected_comparisons,
                 show_technical_replicates=guided_show_technical,
                 statistical_transform=guided_transform, alternative=guided_alternative,

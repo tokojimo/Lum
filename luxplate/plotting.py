@@ -21,6 +21,9 @@ from luxplate.statistics import (all_pairwise_comparisons, directional_test_diag
 
 
 PUBLICATION_COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000")
+DEFAULT_CURVE_Y_SCALE = "linear"
+DEFAULT_BOXPLOT_Y_SCALE = "log"
+BRACKET_ENDPOINT_GAP = .04
 
 # The reporters used routinely in the laboratory keep their visual identity in
 # every figure, independently of CSV row order or newly added strains.
@@ -190,6 +193,28 @@ def _bracket_levels(intervals: list[tuple[int, int]]) -> list[int]:
     return assigned
 
 
+def _bracket_draw_coordinates(intervals: list[tuple[int, int]], levels: list[int],
+                              gap: float = BRACKET_ENDPOINT_GAP) -> list[tuple[float, float]]:
+    """Inset touching endpoints of adjacent brackets on the same packed level.
+
+    These coordinates are exclusively a drawing concern: interval packing and
+    the comparisons used for inference continue to use the original category
+    positions.
+    """
+    coordinates = [(float(min(first, second)), float(max(first, second)))
+                   for first, second in intervals]
+    adjusted = []
+    for (left, right), level in zip(coordinates, levels):
+        same_level = [other for other, other_level in zip(coordinates, levels)
+                      if other_level == level]
+        if any(other_right == left for _, other_right in same_level):
+            left += gap
+        if any(other_left == right for other_left, _ in same_level):
+            right -= gap
+        adjusted.append((left, right))
+    return adjusted
+
+
 def _has_multiple_experiments(data: pd.DataFrame) -> bool:
     if "experience_id" in data and data["experience_id"].dropna().astype(str).nunique() > 1:
         return True
@@ -348,7 +373,7 @@ def _aligned_biological_summary(data: pd.DataFrame, value: str,
 
 
 def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "Groupe",
-                            title: str | None = None, y_scale: str = "linear"):
+                            title: str | None = None, y_scale: str = DEFAULT_CURVE_Y_SCALE):
     """Make one publication-style mean ± SD time-course panel per group."""
     required = {"temps_h", "souche", "sample_header", value, group_by}
     missing = required.difference(data.columns)
@@ -667,6 +692,7 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     intervals = [(positions[row.condition_1], positions[row.condition_2])
                  for row in usable.itertuples(index=False)]
     levels = _bracket_levels(intervals)
+    draw_coordinates = _bracket_draw_coordinates(intervals, levels)
     level_count = max(levels, default=-1) + 1
     # Reserve data-space headroom from the packed level count, rather than the
     # (potentially quadratic) number of comparisons. This works equivalently
@@ -681,8 +707,8 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
             axis.set_ylim(np.exp(np.log(low) - .12 * log_span),
                           np.exp(np.log(high) + (.42 + .18 * level_count) * log_span))
     spacing = min(.075, .30 / max(1, level_count))
-    for level, comparison in zip(levels, usable.itertuples(index=False)):
-        left, right = positions[comparison.condition_1], positions[comparison.condition_2]
+    for level, (left, right), comparison in zip(
+            levels, draw_coordinates, usable.itertuples(index=False)):
         y = .66 + spacing * level
         p_label = _significance_stars(comparison.p_raw)
         axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
@@ -692,7 +718,7 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     return comparisons
 
 
-def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "linear",
+def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEFAULT_BOXPLOT_Y_SCALE,
                        title: str | None = None, group_by: str | None = None,
                        compare_media: bool = False,
                        directional_comparisons: tuple[tuple[str, str], ...] | None = None,
@@ -905,8 +931,9 @@ def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
 def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     families: tuple[str, ...] = ("growth", "corrected", "mixed", "peak",
                                 "peak_time", "auc", "peak_fc", "auc_fc", "doubling"),
-    panel_by: str = "Groupe", lum_scale: str = "linear", normalized_scale: str = "linear",
-    metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux",
+    panel_by: str = "Groupe", lum_scale: str = DEFAULT_CURVE_Y_SCALE,
+    normalized_scale: str = DEFAULT_CURVE_Y_SCALE,
+    metric_scale: str = DEFAULT_BOXPLOT_Y_SCALE, uncertainty: str = "bars", control: str = "P0-lux",
     directional_comparisons: tuple[tuple[str, str], ...] = (),
     statistical_transform: str = "log10", alternative: str = "two-sided",
     significant_only: bool = False,

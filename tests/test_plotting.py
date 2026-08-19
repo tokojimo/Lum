@@ -1,4 +1,5 @@
 import json
+import inspect
 import pickle
 
 import matplotlib.pyplot as plt
@@ -8,7 +9,8 @@ import pytest
 from matplotlib.ticker import FuncFormatter
 
 from luxplate.plotting import (_aligned_biological_summary, _comparison_identifiers,
-                               _bracket_levels,
+                               BRACKET_ENDPOINT_GAP, DEFAULT_BOXPLOT_Y_SCALE,
+                               DEFAULT_CURVE_Y_SCALE, _bracket_draw_coordinates, _bracket_levels,
                                build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
                                build_publication_figures, collect_publication_statistics,
@@ -16,7 +18,7 @@ from luxplate.plotting import (_aligned_biological_summary, _comparison_identifi
                                directional_comparison_options, metric_fold_change_vs_control,
                                plot_kinetics, plot_metric_points, plot_mixed_panels,
                                plot_publication_panels)
-from luxplate.statistics import _canonical_condition
+from luxplate.statistics import _canonical_condition, paired_directional_t_tests
 from test_workflow import workflow_table
 
 
@@ -47,6 +49,58 @@ def test_directional_condition_options_exposes_each_box_once():
 def test_bracket_levels_use_interior_overlap(intervals, level_count):
     levels = _bracket_levels(intervals)
     assert max(levels) + 1 == level_count
+
+
+def test_adjacent_brackets_keep_level_and_get_symmetric_drawing_gap():
+    intervals = [(0, 1), (1, 2), (0, 2)]
+    levels = _bracket_levels(intervals)
+    coordinates = _bracket_draw_coordinates(intervals, levels)
+
+    assert levels[:2] == [0, 0]
+    assert coordinates[:2] == [
+        (0.0, 1.0 - BRACKET_ENDPOINT_GAP),
+        (1.0 + BRACKET_ENDPOINT_GAP, 2.0),
+    ]
+    assert coordinates[2] == (0.0, 2.0)
+
+
+def test_curve_and_boxplot_defaults_are_independent():
+    assert DEFAULT_CURVE_Y_SCALE == "linear"
+    assert DEFAULT_BOXPLOT_Y_SCALE == "log"
+    assert inspect.signature(plot_publication_panels).parameters["y_scale"].default == "linear"
+    assert inspect.signature(plot_metric_points).parameters["y_scale"].default == "log"
+    statistical_defaults = inspect.signature(paired_directional_t_tests).parameters
+    assert statistical_defaults["alternative"].default == "two-sided"
+    assert statistical_defaults["transform"].default == "log10"
+
+
+def test_bracket_drawing_gap_does_not_change_inferential_results():
+    metrics = pd.DataFrame([
+        {"experience_id": experiment, "souche": condition, "Groupe": "M1",
+         "lum_norm_auc": value}
+        for experiment, values in enumerate(((10, 20, 40), (12, 18, 45), (9, 22, 38)), 1)
+        for condition, value in zip(("P0", "PspeD2-1A", "PspeD2-3B"), values)
+    ])
+    comparisons = (("P0", "PspeD2-1A"), ("PspeD2-1A", "PspeD2-3B"))
+    expected = paired_directional_t_tests(
+        metrics, value="lum_norm_auc", condition="souche", identity=("experience_id",),
+        comparisons=comparisons, transform="log10", alternative="two-sided",
+    )
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", directional_comparisons=comparisons,
+        statistical_transform="log10", alternative="two-sided",
+    )
+    actual = figure._luxplate_statistics
+
+    columns = ["condition_1", "condition_2", "statistic", "p_raw", "p_adjusted", "significance"]
+    pd.testing.assert_frame_equal(actual[columns], expected[columns])
+    bracket_lines = [line for line in figure.axes[0].lines if len(line.get_xdata()) == 4]
+    horizontal_endpoints = [(line.get_xdata()[0], line.get_xdata()[2]) for line in bracket_lines[-2:]]
+    assert horizontal_endpoints == [
+        (0.0, 1.0 - BRACKET_ENDPOINT_GAP),
+        (1.0 + BRACKET_ENDPOINT_GAP, 2.0),
+    ]
+    plt.close(figure)
 
 
 def test_directional_condition_options_excludes_blank_controls():
@@ -159,6 +213,7 @@ def test_changing_only_y_scale_leaves_statistics_strictly_unchanged():
     left, right = linear._luxplate_statistics.iloc[0], logged._luxplate_statistics.iloc[0]
     assert left["statistic"] == pytest.approx(right["statistic"])
     assert left["p_raw"] == pytest.approx(right["p_raw"])
+    assert left["p_adjusted"] == pytest.approx(right["p_adjusted"])
     plt.close(linear); plt.close(logged)
 
 
