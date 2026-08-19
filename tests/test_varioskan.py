@@ -37,6 +37,28 @@ def synthetic_workbook(*, second_luminescence=False) -> BytesIO:
     return output
 
 
+def workbook_with_strain_headers(headers: list[str]) -> BytesIO:
+    """Build one plate whose headers are distinct technical wells."""
+    source = synthetic_workbook()
+    workbook = load_workbook(source)
+    sample_headers = [f"{header} (A{position:02d})" for position, header in enumerate(headers, 1)]
+    for sheet_name in ("Absorbance 600", "Luminescence 1"):
+        sheet = workbook[sheet_name]
+        sheet.delete_cols(3, sheet.max_column - 2)
+        for column, header in enumerate(sample_headers, 3):
+            sheet.cell(2, column).value = header
+            sheet.cell(3, column).value = column
+            sheet.cell(4, column).value = column * 2
+    plan = workbook["Plan de plaque"]
+    for column in range(2, 2 + len(headers)):
+        plan.cell(5, column).value = headers[column - 2]
+        plan.cell(6, column).value = "Groupe 1"
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
 def test_parse_kinetic_workbook_preserves_raw_technical_wells():
     result = parse_kinetic_workbook(synthetic_workbook())
     assert len(result) == 6
@@ -108,6 +130,32 @@ def test_equivalent_lux_reporter_spellings_share_a_canonical_strain(header, expe
     result = parse_kinetic_workbook(output)
 
     assert result.loc[result["puits"].eq("A01"), "souche"].unique().tolist() == [expected]
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        ["P0-lux", "P0-lux0002", "P0-lux0003"],
+        ["PspeD2-1A-lux", "PspeD2-1A-lux0002"],
+        ["PspeD2-3B-lux", "PspeD2-3B-lux0025"],
+        ["P0-lux", "P0-lux2", "P0-lux_2", "P0-lux-2", "P0-lux_rep2", "P0-lux-rep2"],
+    ],
+)
+def test_source_generated_technical_suffixes_share_one_strain(headers):
+    result = parse_kinetic_workbook(workbook_with_strain_headers(headers))
+
+    strains = result.loc[result["type"].eq("souche")]
+    assert strains["souche"].unique().tolist() == [headers[0]]
+    assert strains["replicat"].unique().tolist() == list(range(1, len(headers) + 1))
+    assert strains["sample_header"].nunique() == len(headers)
+    assert strains["puits"].nunique() == len(headers)
+
+
+@pytest.mark.parametrize("natural_name", ["PspeD2", "14.1Ac", "14.3B", "PA14", "3-B", "1-A"])
+def test_natural_terminal_digits_are_not_stripped_without_cohort_evidence(natural_name):
+    result = parse_kinetic_workbook(workbook_with_strain_headers([natural_name]))
+
+    assert result.loc[result["type"].eq("souche"), "souche"].unique().tolist() == [natural_name]
 
 
 def test_combining_workbooks_namespaces_internal_blank_links():

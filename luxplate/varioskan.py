@@ -27,6 +27,13 @@ STRAIN_START = re.compile(
 BLANK_NUMBER = re.compile(r"^(?:blanc|blank)\s*[-_ ]?(\d+)\b", flags=re.IGNORECASE)
 MINICTX_REPORTER = re.compile(r"^MiniCTXlux\s*\((.+)\)$", flags=re.IGNORECASE)
 LUX_SUFFIX = re.compile(r"-lux$", flags=re.IGNORECASE)
+TECHNICAL_SUFFIXES = (
+    # Explicit replicate markers are unambiguous, but are still only removed
+    # when the corresponding unsuffixed sample occurs in the same import.
+    re.compile(r"(?:[_-]?rep(?:licat|licate)?[_-]?\d+)$", re.IGNORECASE),
+    re.compile(r"(?:[_-]\d+)$"),
+    re.compile(r"(?:\d+)$"),
+)
 
 
 def clean_text(value: object) -> str:
@@ -54,6 +61,35 @@ def normalize_strain_name(value: object) -> str:
         construct = clean_text(wrapped.group(1))
     construct = LUX_SUFFIX.sub("-lux", construct)
     return f"{prefix}::{construct}" if separator else construct
+
+
+def _canonicalize_technical_suffixes(metadata: pd.DataFrame) -> pd.DataFrame:
+    """Collapse source-generated replicate suffixes using cohort evidence.
+
+    A trailing number is intrinsically ambiguous in a biological name.  It is
+    therefore never removed merely because it is numeric: the candidate name
+    without the suffix must also occur as a sample in the same plate group.
+    The well/header remain untouched and ``replicat`` is assigned later, so no
+    technical series is lost or promoted to a biological replicate.
+    """
+    output = metadata.copy()
+    strains = output["type"].eq("souche")
+    for _, indices in output.loc[strains].groupby("Groupe", sort=False).groups.items():
+        observed = set(output.loc[indices, "souche"])
+        replacements: dict[str, str] = {}
+        for name in observed:
+            candidates = []
+            for suffix in TECHNICAL_SUFFIXES:
+                match = suffix.search(name)
+                if match:
+                    candidates.append(clean_text(name[:match.start()]))
+            # Prefer the longest observed prefix.  This matters when a real
+            # construct itself ends in digits (for example PA14).
+            valid = [candidate for candidate in candidates if candidate in observed]
+            if valid:
+                replacements[name] = max(valid, key=len)
+        output.loc[indices, "souche"] = output.loc[indices, "souche"].replace(replacements)
+    return output
 
 
 def find_measurement_sheets(sheet_names: Iterable[str]) -> tuple[str, list[str]]:
@@ -228,6 +264,7 @@ def parse_kinetic_workbook(
 
         metadata = pd.DataFrame([_sample_metadata(column) for column in common])
         metadata["Groupe"] = _resolve_groups(metadata, _plate_groups(workbook[plan_names[0]]))
+        metadata = _canonicalize_technical_suffixes(metadata)
         metadata["replicat"] = metadata.groupby(["souche", "Groupe"], sort=False).cumcount() + 1
         result = result.merge(metadata, on="sample_header", how="left", validate="many_to_one")
         columns = [
