@@ -1,3 +1,4 @@
+import json
 import pickle
 
 import matplotlib.pyplot as plt
@@ -117,6 +118,48 @@ def test_metric_points_can_show_every_technical_replicate_or_hide_them():
     ]
     plt.close(visible)
     plt.close(hidden)
+
+
+@pytest.mark.parametrize("y_scale", ["linear", "log"])
+@pytest.mark.parametrize("statistical_transform", ["none", "log10"])
+def test_axis_scale_and_statistical_transform_are_independent(y_scale, statistical_transform):
+    metrics = pd.DataFrame([
+        {"experience_id": experiment, "souche": condition, "Groupe": "M1",
+         "lum_norm_auc": value}
+        for experiment, left, right in ((1, 2, 1), (2, 8, 2), (3, 12, 10), (4, 150, 100))
+        for condition, value in (("A", left), ("B", right))
+    ])
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", y_scale=y_scale,
+        statistical_transform=statistical_transform,
+        directional_comparisons=(("A", "B"),),
+    )
+    result = figure._luxplate_statistics.iloc[0]
+    records = json.loads(result["paired_values_json"])
+    expected = np.array([2, 8, 12, 150], dtype=float)
+    if statistical_transform == "log10":
+        expected = np.log10(expected)
+    assert figure.axes[0].get_yscale() == y_scale
+    np.testing.assert_allclose([row["condition_1_transformed"] for row in records], expected)
+    assert result["y_scale"] == y_scale
+    plt.close(figure)
+
+
+def test_changing_only_y_scale_leaves_statistics_strictly_unchanged():
+    metrics = pd.DataFrame([
+        {"experience_id": experiment, "souche": condition, "Groupe": "M1",
+         "lum_norm_auc": value}
+        for experiment, left, right in ((1, 2, 1), (2, 8, 2), (3, 12, 10), (4, 150, 100))
+        for condition, value in (("A", left), ("B", right))
+    ])
+    kwargs = dict(metric="lum_norm_auc", statistical_transform="log10",
+                  directional_comparisons=(("A", "B"),))
+    linear = plot_metric_points(metrics, y_scale="linear", **kwargs)
+    logged = plot_metric_points(metrics, y_scale="log", **kwargs)
+    left, right = linear._luxplate_statistics.iloc[0], logged._luxplate_statistics.iloc[0]
+    assert left["statistic"] == pytest.approx(right["statistic"])
+    assert left["p_raw"] == pytest.approx(right["p_raw"])
+    plt.close(linear); plt.close(logged)
 
 
 def test_guided_raw_figures_group_technical_replicates_in_one_biological_row():

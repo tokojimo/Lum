@@ -549,6 +549,8 @@ def _significance_stars(p_value: float) -> str:
 def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, *,
                        metric: str, condition: str, y_scale: str, panel_title: str,
                        seed: int, directional_comparisons: tuple[tuple[str, str], ...] | None = None,
+                       statistical_biological: pd.DataFrame | None = None,
+                       statistical_transform: str = "log10", alternative: str = "two-sided",
                        significant_only: bool = False,
                        show_technical_replicates: bool = True) -> pd.DataFrame:
     """Draw one metric panel and return its pairwise statistics."""
@@ -650,9 +652,11 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     effective_comparisons = (all_pairwise_comparisons(conditions)
                              if directional_comparisons is None else directional_comparisons)
     comparisons = paired_directional_t_tests(
-        biological, value=metric, condition=condition,
+        biological if statistical_biological is None else statistical_biological,
+        value=metric, condition=condition,
         identity=tuple(identity_columns),
         comparisons=effective_comparisons,
+        transform=statistical_transform, alternative=alternative,
     )
     positions = {item: index for index, item in enumerate(conditions)}
     usable = comparisons.loc[comparisons["condition_1"].isin(positions)
@@ -692,6 +696,7 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
                        title: str | None = None, group_by: str | None = None,
                        compare_media: bool = False,
                        directional_comparisons: tuple[tuple[str, str], ...] | None = None,
+                       statistical_transform: str = "log10", alternative: str = "two-sided",
                        significant_only: bool = False,
                        show_technical_replicates: bool = True):
     """Plot metric distributions, optionally with one panel per medium or strain."""
@@ -704,8 +709,9 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     if y_scale not in {"linear", "log"}:
         raise ValueError("Scale must be 'linear' or 'log'.")
     numeric = pd.to_numeric(metrics[metric], errors="coerce").replace([np.inf, -np.inf], np.nan)
-    technical = metrics.loc[numeric.notna()].copy()
-    technical[metric] = numeric.loc[technical.index]
+    statistical_technical = metrics.loc[numeric.notna()].copy()
+    statistical_technical[metric] = numeric.loc[statistical_technical.index]
+    technical = statistical_technical.copy()
     effective_scale = y_scale
     if y_scale == "log":
         if technical[metric].gt(0).any():
@@ -724,6 +730,9 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     if not biological_ids and "replicat" in technical and technical["replicat"].notna().any():
         biological_ids = ["replicat"]
     group_columns = ["souche", "Groupe", *biological_ids]
+    statistical_biological = statistical_technical.groupby(
+        group_columns, dropna=False, sort=False
+    )[metric].mean().reset_index()
     biological = technical.groupby(group_columns, dropna=False, sort=False)[metric].mean().reset_index()
     diagnostic_metrics = [column for column in ("lum_norm_peak", "lum_norm_auc")
                           if column in metrics]
@@ -739,6 +748,11 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         biological["_medium"] = biological["Groupe"].map(_medium_label)
         biological["_comparison"] = _comparison_identifiers(
             biological["_reporter"], biological["_medium"]
+        )
+        statistical_biological["_reporter"] = statistical_biological["souche"].astype(str)
+        statistical_biological["_medium"] = statistical_biological["Groupe"].map(_medium_label)
+        statistical_biological["_comparison"] = _comparison_identifiers(
+            statistical_biological["_reporter"], statistical_biological["_medium"]
         )
         diagnostic_biological["_reporter"] = diagnostic_biological["souche"].astype(str)
         diagnostic_biological["_medium"] = diagnostic_biological["Groupe"].map(_medium_label)
@@ -775,6 +789,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     for index, panel in enumerate(panels):
         panel_technical = technical if panel is None else technical.loc[technical[group_by].astype(str).eq(panel)]
         panel_biological = biological if panel is None else biological.loc[biological[group_by].astype(str).eq(panel)]
+        panel_statistical = (statistical_biological if panel is None else
+            statistical_biological.loc[statistical_biological[group_by].astype(str).eq(panel)])
         panel_diagnostic_biological = (
             diagnostic_biological if panel is None else
             diagnostic_biological.loc[diagnostic_biological[group_by].astype(str).eq(panel)]
@@ -783,6 +799,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         statistics = _draw_metric_panel(axes.flat[index], panel_technical, panel_biological,
             metric=metric, condition=condition, y_scale=effective_scale,
             panel_title=panel_title, seed=1947 + index,
+            statistical_biological=panel_statistical,
+            statistical_transform=statistical_transform, alternative=alternative,
             directional_comparisons=directional_comparisons,
             significant_only=significant_only,
             show_technical_replicates=show_technical_replicates)
@@ -817,6 +835,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
     if group_by is not None:
         figure.suptitle(title or metric, fontweight="bold", y=.995)
     figure._luxplate_statistics = pd.concat(all_statistics, ignore_index=True) if all_statistics else pd.DataFrame()
+    if not figure._luxplate_statistics.empty:
+        figure._luxplate_statistics["y_scale"] = effective_scale
     figure._luxplate_statistical_diagnostics = all_diagnostics
     figure.tight_layout(rect=(0, 0, 1, .96) if group_by is not None and not compare_media else None)
     return figure
@@ -888,6 +908,7 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     panel_by: str = "Groupe", lum_scale: str = "linear", normalized_scale: str = "linear",
     metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux",
     directional_comparisons: tuple[tuple[str, str], ...] = (),
+    statistical_transform: str = "log10", alternative: str = "two-sided",
     significant_only: bool = False,
     show_technical_replicates: bool = True) -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
@@ -938,6 +959,7 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                         fold_changes, metric=fold_metric, y_scale=metric_scale,
                         title=figure_label, compare_media=True,
                         directional_comparisons=directional_comparisons,
+                        statistical_transform=statistical_transform, alternative=alternative,
                         significant_only=significant_only,
                         show_technical_replicates=show_technical_replicates)))
                 else:
@@ -945,6 +967,7 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                     figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
                         title=figure_label, compare_media=True,
                         directional_comparisons=directional_comparisons,
+                        statistical_transform=statistical_transform, alternative=alternative,
                         significant_only=significant_only,
                         show_technical_replicates=show_technical_replicates)))
     if "control" in families:

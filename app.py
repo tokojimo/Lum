@@ -90,14 +90,19 @@ def cached_publication_figures(
     families: tuple[str, ...],
     panel_by: str,
     lum_scale: str,
+    metric_scale: str,
     directional_comparisons: tuple[tuple[str, str], ...],
     show_technical_replicates: bool,
+    statistical_transform: str,
+    alternative: str,
 ):
     """Reuse publication figures across Streamlit's full-script reruns."""
     return build_publication_figures(
         data, title=title, families=families, panel_by=panel_by, lum_scale=lum_scale,
+        metric_scale=metric_scale,
         directional_comparisons=directional_comparisons,
         show_technical_replicates=show_technical_replicates,
+        statistical_transform=statistical_transform, alternative=alternative,
     )
 
 
@@ -271,13 +276,17 @@ def render_guided_results(complete, base: str) -> None:
             "Figures finales", list(guided_family_labels),
             default=list(guided_family_labels), key="guided_figure_families",
         )
+        st.markdown("#### Affichage")
         guided_options = st.columns(3)
         guided_panel_label = guided_options[0].selectbox(
             "Organisation des panneaux", ["Panneaux par milieu", "Panneaux par souche"],
             key="guided_figure_panels",
         )
         guided_lum_label = guided_options[1].selectbox(
-            "Luminescence", ["Linéaire", "Logarithmique"], key="guided_figure_lum_scale",
+            "Échelle de l’axe Y", ["Linéaire", "Logarithmique (base 10)"],
+            index=1, key="guided_figure_lum_scale",
+            help=("Ce réglage modifie uniquement l’affichage de la figure. "
+                  "Il ne transforme pas les valeurs utilisées pour les tests statistiques."),
         )
         guided_show_technical = guided_options[2].checkbox(
             "Afficher les réplicats techniques",
@@ -286,10 +295,30 @@ def render_guided_results(complete, base: str) -> None:
             help=("Ajoute un petit point par puits technique dans les figures de synthèse, "
                   "quel que soit le nombre de réplicats."),
         )
-        with st.expander("Hypothèses statistiques directionnelles", expanded=False):
+        st.markdown("#### Statistiques")
+        statistics_options = st.columns(3)
+        guided_test_label = statistics_options[0].selectbox(
+            "Test", ["t-test apparié bilatéral", "t-test apparié unilatéral (A > B)"],
+            key="guided_statistical_test",
+        )
+        guided_transform_label = statistics_options[1].selectbox(
+            "Transformation utilisée pour le test", ["log10", "Valeurs brutes"],
+            key="guided_statistical_transform",
+            help=("Cette transformation est appliquée uniquement aux valeurs utilisées pour le test "
+                  "statistique. Elle est indépendante de l’échelle utilisée pour afficher la figure."),
+        )
+        statistics_options[2].selectbox(
+            "Correction des comparaisons multiples", ["Holm"], disabled=True,
+            key="guided_multiple_testing",
+        )
+        guided_transform = "log10" if guided_transform_label == "log10" else "none"
+        guided_alternative = ("two-sided" if "bilatéral" in guided_test_label else "greater")
+        with st.expander("Comparaisons statistiques", expanded=False):
             st.caption(
                 "Sélectionnez uniquement les hypothèses définies avant de consulter les résultats. "
-                "Chaque choix teste la condition à gauche comme supérieure à celle de droite."
+                + ("Chaque choix compare les deux conditions dans les deux sens."
+                   if guided_alternative == "two-sided" else
+                   "Chaque choix teste la condition à gauche comme supérieure à celle de droite.")
             )
             guided_selected_comparisons = select_directional_comparisons(
                 complete.normalization.normalized_data,
@@ -304,9 +333,11 @@ def render_guided_results(complete, base: str) -> None:
                 title="Analyse complète",
                 families=tuple(guided_family_labels[label] for label in guided_figure_labels),
                 panel_by="Groupe" if guided_panel_label.endswith("milieu") else "souche",
-                lum_scale="log" if guided_lum_label == "Logarithmique" else "linear",
+                lum_scale="log" if guided_lum_label == "Logarithmique (base 10)" else "linear",
+                metric_scale="log" if guided_lum_label == "Logarithmique (base 10)" else "linear",
                 directional_comparisons=guided_selected_comparisons,
                 show_technical_replicates=guided_show_technical,
+                statistical_transform=guided_transform, alternative=guided_alternative,
             )
             statistical_results = collect_publication_statistics(guided_figures)
             if guided_selected_comparisons:
@@ -324,16 +355,27 @@ def render_guided_results(complete, base: str) -> None:
                             "\0", " · ", regex=False
                         )
                     st.dataframe(
-                        visible_statistics[["figure", "condition_1", "condition_2", "n_pairs",
-                                            "p_raw", "significance", "calculation_status",
+                        visible_statistics[["figure", "condition_1", "condition_2", "test",
+                                            "alternative", "statistical_transform", "n_pairs",
+                                            "p_raw", "p_adjusted", "multiple_testing_method",
+                                            "significance", "calculation_status",
                                             "non_calculable_reason"]].rename(columns={
                             "figure": "Mesure", "condition_1": "Condition A",
-                            "condition_2": "Condition B", "n_pairs": "Paires biologiques",
-                            "p_raw": "p-value", "significance": "Résultat",
+                            "condition_2": "Condition B", "test": "Test",
+                            "alternative": "Alternative", "statistical_transform": "Transformation",
+                            "n_pairs": "Paires biologiques", "p_raw": "p brute",
+                            "p_adjusted": "p ajustée", "multiple_testing_method": "Correction",
+                            "significance": "Résultat",
                             "calculation_status": "Statut",
                             "non_calculable_reason": "Raison si non calculable",
                         }),
                         use_container_width=True, hide_index=True,
+                    )
+                    st.download_button(
+                        "Exporter les statistiques (.csv)",
+                        statistical_results.to_csv(index=False).encode("utf-8-sig"),
+                        f"{base}_statistiques.csv", "text/csv",
+                        key="guided_statistics_export",
                     )
                     if statistical_results["p_raw"].isna().any():
                         st.info(
@@ -391,10 +433,14 @@ def render_guided_results(complete, base: str) -> None:
                 statistics = getattr(guided_figure, "_luxplate_statistics", pd.DataFrame())
                 if not statistics.empty:
                     st.dataframe(
-                        statistics[["condition_1", "condition_2", "n_pairs", "p_raw",
+                        statistics[["condition_1", "condition_2", "test", "alternative",
+                                    "statistical_transform", "n_pairs", "p_raw", "p_adjusted",
                                     "significance"]].rename(columns={
                             "condition_1": "Condition A", "condition_2": "Condition B",
-                            "n_pairs": "Paires biologiques", "p_raw": "p-value",
+                            "test": "Test", "alternative": "Alternative",
+                            "statistical_transform": "Transformation",
+                            "n_pairs": "Paires biologiques", "p_raw": "p brute",
+                            "p_adjusted": "p ajustée Holm",
                             "significance": "Résultat",
                         }),
                         use_container_width=True, hide_index=True,
@@ -407,8 +453,8 @@ def render_guided_results(complete, base: str) -> None:
                 "Summary boxplots show independent biological experiments and their exact mean; "
                 "Quand leur affichage est activé, les petits points sont les réplicats techniques "
                 "et les grands points les moyennes biologiques. "
-                "Les seules statistiques affichées sont les hypothèses sélectionnées : test t "
-                "apparié unilatéral sur log10 des moyennes biologiques. Chaque comparaison "
+                f"Les seules statistiques affichées sont les hypothèses sélectionnées : {guided_test_label} "
+                f"— {guided_transform_label} des moyennes biologiques. Chaque comparaison "
                 "planifiée 2 à 2 utilise sa p-value brute pour les étoiles ; la correction de "
                 "Holm reste disponible dans le tableau statistique exporté."
             )
