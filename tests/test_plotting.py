@@ -7,6 +7,7 @@ import pytest
 from matplotlib.ticker import FuncFormatter
 
 from luxplate.plotting import (_aligned_biological_summary, _comparison_identifiers,
+                               _bracket_levels,
                                build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
                                build_publication_figures, collect_publication_statistics,
@@ -33,6 +34,18 @@ def test_directional_condition_options_exposes_each_box_once():
         "P0 · SCFM2 > PspeD · SCFM2": ("P0-lux\0SCFM2", "PspeD-lux\0SCFM2"),
         "PspeD · SCFM2 > P0 · SCFM2": ("PspeD-lux\0SCFM2", "P0-lux\0SCFM2"),
     }
+
+
+@pytest.mark.parametrize(("intervals", "level_count"), [
+    ([(0, 1), (1, 2)], 1),
+    ([(0, 1), (1, 2), (0, 2)], 2),
+    ([(0, 1), (2, 3)], 1),
+    ([(0, 2), (1, 3)], 2),
+    ([(0, 3), (1, 2)], 2),
+])
+def test_bracket_levels_use_interior_overlap(intervals, level_count):
+    levels = _bracket_levels(intervals)
+    assert max(levels) + 1 == level_count
 
 
 def test_directional_condition_options_excludes_blank_controls():
@@ -480,8 +493,8 @@ def test_metric_points_compare_every_strain_medium_pair_in_one_figure():
         "PspeD\nMilieu 1", "PspeD\nMilieu 2", "PspeE\nMilieu 1",
         "PspeE\nMilieu 2", "P0\nMilieu 1", "P0\nMilieu 2",
     ]
-    # No hypothesis is tested automatically.
-    assert figure._luxplate_statistics.empty
+    # Six compatible boxes produce every unordered pair once.
+    assert len(figure._luxplate_statistics) == 15
     plt.close(figure)
 
 

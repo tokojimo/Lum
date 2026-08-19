@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
@@ -21,6 +22,12 @@ RESULT_COLUMNS = [
     "significance", "calculation_status", "non_calculable_reason",
     "paired_values_json",
 ]
+
+
+def all_pairwise_comparisons(conditions) -> tuple[tuple[object, object], ...]:
+    """Return every unordered pair once, preserving condition order."""
+    unique = list(dict.fromkeys(conditions))
+    return tuple(combinations(unique, 2))
 
 
 def _paired_value_table(
@@ -144,23 +151,27 @@ def _significance(p_value: float) -> str:
 def paired_directional_t_tests(
     biological: pd.DataFrame, *, value: str, condition: str = "souche",
     identity: tuple[str, ...] = ("experience_id", "experience", "biological_replicate_id"),
-    comparisons: tuple[tuple[str, str], ...] = (),
+    comparisons: tuple[tuple[str, str], ...] | None = None,
 ) -> pd.DataFrame:
-    """Test explicitly requested ``left > right`` hypotheses on log10 values.
+    """Test requested, or by default all unique, hypotheses on log10 values.
 
     A paired, one-tailed t-test is calculated only for positive, complete
     biological pairs.  Holm adjustment treats all requested, estimable
-    contrasts as one comparison family.  With no pre-specified hypotheses no
-    inferential test is performed.
+    contrasts as one comparison family. Passing an empty tuple explicitly
+    disables inference; omitting comparisons tests every unordered pair once.
     """
     ids = [column for column in identity
            if column in biological and biological[column].notna().any()]
     ids = ids or [column for column in ("Groupe",) if column in biological]
-    if not comparisons or not ids or condition not in biological or value not in biological:
+    if not ids or condition not in biological or value not in biological:
         return pd.DataFrame(columns=RESULT_COLUMNS)
 
     table = _paired_value_table(biological, ids, condition, value)
     available = list(table.columns)
+    if comparisons is None:
+        comparisons = all_pairwise_comparisons(available)
+    if not comparisons:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
     canonical_available: dict[str, list[object]] = {}
     for item in available:
         canonical_available.setdefault(_canonical_condition(item), []).append(item)

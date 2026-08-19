@@ -4,7 +4,37 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from luxplate.statistics import directional_test_diagnostics, paired_directional_t_tests
+from luxplate.statistics import (all_pairwise_comparisons, directional_test_diagnostics,
+                                 paired_directional_t_tests)
+
+
+@pytest.mark.parametrize(("conditions", "expected"), [
+    (("A", "B", "C"), (("A", "B"), ("A", "C"), ("B", "C"))),
+    (("A", "B", "C", "D"), (
+        ("A", "B"), ("A", "C"), ("A", "D"),
+        ("B", "C"), ("B", "D"), ("C", "D"),
+    )),
+])
+def test_all_pairwise_comparisons_are_unique(conditions, expected):
+    pairs = all_pairwise_comparisons(conditions)
+    assert pairs == expected
+    assert len({frozenset(pair) for pair in pairs}) == len(pairs)
+
+
+def test_default_all_pairs_preserves_existing_pair_statistic_and_p_value():
+    biological = _biological([(10, 20, 30), (12, 25, 32), (9, 22, 28), (14, 31, 35)])
+    explicitly_selected = paired_directional_t_tests(
+        biological, value="value", comparisons=(("control", "reporter"),)
+    ).iloc[0]
+    all_pairs = paired_directional_t_tests(biological, value="value")
+
+    assert len(all_pairs) == 3
+    same_pair = all_pairs.loc[
+        all_pairs["condition_1"].eq("control")
+        & all_pairs["condition_2"].eq("reporter")
+    ].iloc[0]
+    assert same_pair["statistic_t"] == explicitly_selected["statistic_t"]
+    assert same_pair["p_raw"] == explicitly_selected["p_raw"]
 
 
 def _biological(values):
@@ -65,7 +95,7 @@ def test_separately_planned_pairwise_significance_uses_raw_p_value():
 
 def test_direction_is_preserved_and_no_selection_means_no_test():
     biological = _biological([(1, 2, 3), (2, 4, 6), (4, 9, 12)])
-    assert paired_directional_t_tests(biological, value="value").empty
+    assert paired_directional_t_tests(biological, value="value", comparisons=()).empty
     forward = paired_directional_t_tests(
         biological, value="value", comparisons=(("reporter", "control"),)
     )

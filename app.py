@@ -15,6 +15,7 @@ from luxplate.plotting import (build_guided_corrected_figures,
                                build_publication_figures, collect_publication_statistics,
                                directional_condition_options)
 from luxplate.project import PROJECT_KEYS, export_project, import_project
+from luxplate.statistics import all_pairwise_comparisons
 from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
 from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
                                filter_experiment_data, run_complete_analysis)
@@ -116,6 +117,10 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
     stack_key = f"{key}_stack"
     validated_key = f"{key}_validated"
     valid_ids = set(conditions.values())
+    if stack_key not in st.session_state:
+        defaults = list(all_pairwise_comparisons(conditions.values()))
+        st.session_state[stack_key] = defaults
+        st.session_state[validated_key] = defaults
     stack = [tuple(pair) for pair in st.session_state.get(stack_key, [])
              if len(pair) == 2 and pair[0] in valid_ids and pair[1] in valid_ids and pair[0] != pair[1]]
     # Preserve insertion order while removing hypotheses added through more than one shortcut.
