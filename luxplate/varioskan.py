@@ -26,7 +26,14 @@ STRAIN_START = re.compile(
 )
 BLANK_NUMBER = re.compile(r"^(?:blanc|blank)\s*[-_ ]?(\d+)\b", flags=re.IGNORECASE)
 MINICTX_REPORTER = re.compile(r"^MiniCTXlux\s*\((.+)\)$", flags=re.IGNORECASE)
-LUX_SUFFIX = re.compile(r"-lux$", flags=re.IGNORECASE)
+# Varioskan can append ``0001`` to an exported sample label, including after a
+# biologically meaningful qualifier such as ``(M1)``.  Restrict the rule to a
+# lux reporter identity: stripping arbitrary terminal digits would corrupt
+# real strain/construct names such as PA14, PspeD2, or PspeD2-1A.
+VARIOSKAN_LUX_0001_SUFFIX = re.compile(
+    r"(?P<identity>-lux(?:\s+\([^()]+\))?)0001$",
+    flags=re.IGNORECASE,
+)
 TECHNICAL_SUFFIXES = (
     # Explicit replicate markers are unambiguous, but are still only removed
     # when the corresponding unsuffixed sample occurs in the same import.
@@ -60,7 +67,10 @@ def normalize_strain_name(value: object) -> str:
     wrapped = MINICTX_REPORTER.fullmatch(construct)
     if wrapped:
         construct = clean_text(wrapped.group(1))
-    construct = LUX_SUFFIX.sub("-lux", construct)
+    construct = VARIOSKAN_LUX_0001_SUFFIX.sub(r"\g<identity>", construct)
+    # Canonicalize the reporter token even when a meaningful qualifier follows
+    # it (for example ``P0-Lux (M1)``), rather than only at end of string.
+    construct = re.sub(r"-lux(?=$|\s+\()", "-lux", construct, flags=re.IGNORECASE)
     return f"{prefix}::{construct}" if separator else construct
 
 

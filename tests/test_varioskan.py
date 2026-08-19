@@ -4,7 +4,12 @@ import numpy as np
 import pytest
 from openpyxl import Workbook, load_workbook
 
-from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
+from luxplate.varioskan import (
+    combine_kinetic_tables,
+    inspect_workbook,
+    normalize_strain_name,
+    parse_kinetic_workbook,
+)
 
 
 def synthetic_workbook(*, second_luminescence=False) -> BytesIO:
@@ -137,6 +142,50 @@ def test_equivalent_lux_reporter_spellings_share_a_canonical_strain(header, expe
     result = parse_kinetic_workbook(output)
 
     assert result.loc[result["puits"].eq("A01"), "souche"].unique().tolist() == [expected]
+
+
+def test_varioskan_0001_suffix_is_removed_without_losing_biological_qualifiers():
+    assert normalize_strain_name("14.1Ac attB::P0-lux0001") == normalize_strain_name(
+        "14.1Ac attB::P0-Lux"
+    )
+    assert normalize_strain_name("14.1Ac attB::PspeD2-1A-Lux") == normalize_strain_name(
+        "14.1Ac attB::PspeD2-1A-lux"
+    )
+    assert normalize_strain_name("14.1Ac attB::PspeD2-3B-Lux") == normalize_strain_name(
+        "14.1Ac attB::PspeD2-3B-lux"
+    )
+    assert normalize_strain_name("14.1Ac attB::P0-lux (M1)0001") == (
+        "14.1Ac attB::P0-lux (M1)"
+    )
+    assert normalize_strain_name("14.1Ac attB::P0-lux (M1)0001") != normalize_strain_name(
+        "14.1Ac attB::P0-lux (M2)0001"
+    )
+
+
+def test_lone_varioskan_0001_header_is_canonicalized_during_import():
+    headers = ["LB 14.1Ac attB::P0-lux0001"] * 3
+
+    strains = parse_kinetic_workbook(workbook_with_strain_headers(headers)).query("type == 'souche'")
+
+    assert strains["souche"].unique().tolist() == ["14.1Ac attB::P0-lux"]
+    assert strains["Groupe"].unique().tolist() == ["LB"]
+    assert strains["replicat"].unique().tolist() == [1, 2, 3]
+    assert strains["puits"].nunique() == 3
+
+
+def test_morphotypes_remain_distinct_during_import():
+    headers = [
+        "SCFM2-KPI 14.1Ac attB::P0-lux (M1)0001",
+        "SCFM2-KPI 14.1Ac attB::P0-lux (M2)0001",
+    ]
+
+    strains = parse_kinetic_workbook(workbook_with_strain_headers(headers)).query("type == 'souche'")
+
+    assert strains["souche"].unique().tolist() == [
+        "14.1Ac attB::P0-lux (M1)",
+        "14.1Ac attB::P0-lux (M2)",
+    ]
+    assert strains["Groupe"].unique().tolist() == ["SCFM2-KPI"]
 
 
 @pytest.mark.parametrize(
