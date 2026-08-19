@@ -39,9 +39,12 @@ def synthetic_workbook(*, second_luminescence=False) -> BytesIO:
 
 def workbook_with_strain_headers(headers: list[str]) -> BytesIO:
     """Build one plate whose headers are distinct technical wells."""
+    if len(headers) > 96:
+        raise ValueError("Une plaque synthétique ne peut pas dépasser 96 puits.")
     source = synthetic_workbook()
     workbook = load_workbook(source)
-    sample_headers = [f"{header} (A{position:02d})" for position, header in enumerate(headers, 1)]
+    wells = [f"{chr(ord('A') + index // 12)}{index % 12 + 1:02d}" for index in range(len(headers))]
+    sample_headers = [f"{header} ({well})" for header, well in zip(headers, wells)]
     for sheet_name in ("Absorbance 600", "Luminescence 1"):
         sheet = workbook[sheet_name]
         sheet.delete_cols(3, sheet.max_column - 2)
@@ -50,9 +53,13 @@ def workbook_with_strain_headers(headers: list[str]) -> BytesIO:
             sheet.cell(3, column).value = column
             sheet.cell(4, column).value = column * 2
     plan = workbook["Plan de plaque"]
-    for column in range(2, 2 + len(headers)):
-        plan.cell(5, column).value = headers[column - 2]
-        plan.cell(6, column).value = "Groupe 1"
+    plan.delete_rows(5, max(plan.max_row - 4, 0))
+    for row_index in range((len(headers) + 11) // 12):
+        sample_row = 5 + row_index * 2
+        plan.cell(sample_row, 1).value = chr(ord("A") + row_index)
+        for column in range(2, min(14, len(headers) - row_index * 12 + 2)):
+            plan.cell(sample_row, column).value = headers[row_index * 12 + column - 2]
+            plan.cell(sample_row + 1, column).value = "Groupe 1"
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
@@ -149,6 +156,50 @@ def test_source_generated_technical_suffixes_share_one_strain(headers):
     assert strains["replicat"].unique().tolist() == list(range(1, len(headers) + 1))
     assert strains["sample_header"].nunique() == len(headers)
     assert strains["puits"].nunique() == len(headers)
+
+
+@pytest.mark.parametrize("promoter", ["PspeD2-1A", "PspeD2-3B"])
+def test_numbered_lux_series_is_collapsed_without_unsuffixed_header(promoter):
+    headers = [f"{promoter}-lux{number:04d}" for number in (1, 2, 3, 25)]
+
+    strains = parse_kinetic_workbook(workbook_with_strain_headers(headers)).query("type == 'souche'")
+
+    assert strains["souche"].unique().tolist() == [f"{promoter}-lux"]
+    assert strains["replicat"].unique().tolist() == [1, 2, 3, 4]
+    assert strains["sample_header"].nunique() == 4
+    assert strains["puits"].nunique() == 4
+
+
+@pytest.mark.parametrize("promoter", ["PspeD2-1A", "PspeD2-3B"])
+def test_complete_numbered_lux_series_has_25_replicates(promoter):
+    headers = [f"{promoter}-lux{number:04d}" for number in range(1, 26)]
+
+    strains = parse_kinetic_workbook(workbook_with_strain_headers(headers)).query("type == 'souche'")
+
+    assert strains["souche"].unique().tolist() == [f"{promoter}-lux"]
+    assert strains["replicat"].unique().tolist() == list(range(1, 26))
+
+
+def test_ma_complex_reference_structure_has_exactly_three_strains():
+    strain_prefix = "14.1Ac attb::"
+    headers = (
+        [f"{strain_prefix}P0-lux"] * 22
+        + [f"{strain_prefix}PspeD2-1A-lux{number:04d}" for number in range(1, 26)]
+        + [f"{strain_prefix}PspeD2-3B-lux{number:04d}" for number in range(1, 26)]
+    )
+
+    strains = parse_kinetic_workbook(workbook_with_strain_headers(headers)).query("type == 'souche'")
+
+    assert strains["souche"].unique().tolist() == [
+        f"{strain_prefix}P0-lux",
+        f"{strain_prefix}PspeD2-1A-lux",
+        f"{strain_prefix}PspeD2-3B-lux",
+    ]
+    assert strains.groupby("souche")["sample_header"].nunique().to_dict() == {
+        f"{strain_prefix}P0-lux": 22,
+        f"{strain_prefix}PspeD2-1A-lux": 25,
+        f"{strain_prefix}PspeD2-3B-lux": 25,
+    }
 
 
 @pytest.mark.parametrize("natural_name", ["PspeD2", "14.1Ac", "14.3B", "PA14", "3-B", "1-A"])

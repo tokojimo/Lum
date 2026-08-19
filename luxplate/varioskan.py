@@ -34,6 +34,7 @@ TECHNICAL_SUFFIXES = (
     re.compile(r"(?:[_-]\d+)$"),
     re.compile(r"(?:\d+)$"),
 )
+NUMBERED_LUX_SERIES = re.compile(r"^(.*-lux)(\d{4})$", flags=re.IGNORECASE)
 
 
 def clean_text(value: object) -> str:
@@ -66,17 +67,30 @@ def normalize_strain_name(value: object) -> str:
 def _canonicalize_technical_suffixes(metadata: pd.DataFrame) -> pd.DataFrame:
     """Collapse source-generated replicate suffixes using cohort evidence.
 
-    A trailing number is intrinsically ambiguous in a biological name.  It is
-    therefore never removed merely because it is numeric: the candidate name
-    without the suffix must also occur as a sample in the same plate group.
-    The well/header remain untouched and ``replicat`` is assigned later, so no
-    technical series is lost or promoted to a biological replicate.
+    A trailing number is intrinsically ambiguous in a biological name.  A
+    candidate without the suffix is normally accepted only when that base name
+    also occurs in the same plate group.  Varioskan additionally emits lux
+    technical series as ``-lux0001``, ``-lux0002``, ... without emitting an
+    unsuffixed header.  Two or more distinct four-digit members provide enough
+    cohort evidence to collapse that series safely.  The well/header remain
+    untouched and ``replicat`` is assigned later, so no technical series is
+    lost or promoted to a biological replicate.
     """
     output = metadata.copy()
     strains = output["type"].eq("souche")
     for _, indices in output.loc[strains].groupby("Groupe", sort=False).groups.items():
         observed = set(output.loc[indices, "souche"])
         replacements: dict[str, str] = {}
+
+        numbered_lux: dict[str, set[str]] = {}
+        for name in observed:
+            match = NUMBERED_LUX_SERIES.fullmatch(name)
+            if match:
+                numbered_lux.setdefault(match.group(1), set()).add(name)
+        for base, members in numbered_lux.items():
+            if len(members) >= 2:
+                replacements.update(dict.fromkeys(members, base))
+
         for name in observed:
             candidates = []
             for suffix in TECHNICAL_SUFFIXES:
@@ -86,7 +100,7 @@ def _canonicalize_technical_suffixes(metadata: pd.DataFrame) -> pd.DataFrame:
             # Prefer the longest observed prefix.  This matters when a real
             # construct itself ends in digits (for example PA14).
             valid = [candidate for candidate in candidates if candidate in observed]
-            if valid:
+            if valid and name not in replacements:
                 replacements[name] = max(valid, key=len)
         output.loc[indices, "souche"] = output.loc[indices, "souche"].replace(replacements)
     return output
