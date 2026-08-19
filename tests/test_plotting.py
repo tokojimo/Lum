@@ -69,6 +69,30 @@ def test_collect_publication_statistics_is_empty_without_metric_tests():
     plt.close(figure)
 
 
+def test_metric_points_can_show_every_technical_replicate_or_hide_them():
+    metrics = pd.DataFrame({
+        "souche": ["P0-lux"] * 25,
+        "Groupe": ["SCFM2"] * 25,
+        "replicat": range(1, 26),
+        "lum_norm_peak": np.arange(1, 26, dtype=float),
+    })
+
+    visible = plot_metric_points(metrics, metric="lum_norm_peak")
+    hidden = plot_metric_points(
+        metrics, metric="lum_norm_peak", show_technical_replicates=False
+    )
+
+    # The boxplot creates other Line2D artists; technical points are the only
+    # line containing all 25 observations at once.
+    assert any(len(line.get_ydata()) == 25 for line in visible.axes[0].lines)
+    assert not any(len(line.get_ydata()) == 25 for line in hidden.axes[0].lines)
+    assert [text.get_text() for text in hidden.axes[0].get_legend().get_texts()] == [
+        "Biological mean"
+    ]
+    plt.close(visible)
+    plt.close(hidden)
+
+
 def test_guided_raw_figures_group_technical_replicates_in_one_biological_row():
     data = workflow_table()
     second_replicate = data.loc[data["type"].eq("souche")].copy()

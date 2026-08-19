@@ -90,11 +90,13 @@ def cached_publication_figures(
     panel_by: str,
     lum_scale: str,
     directional_comparisons: tuple[tuple[str, str], ...],
+    show_technical_replicates: bool,
 ):
     """Reuse publication figures across Streamlit's full-script reruns."""
     return build_publication_figures(
         data, title=title, families=families, panel_by=panel_by, lum_scale=lum_scale,
         directional_comparisons=directional_comparisons,
+        show_technical_replicates=show_technical_replicates,
     )
 
 
@@ -264,13 +266,20 @@ def render_guided_results(complete, base: str) -> None:
             "Figures finales", list(guided_family_labels),
             default=list(guided_family_labels), key="guided_figure_families",
         )
-        guided_options = st.columns(2)
+        guided_options = st.columns(3)
         guided_panel_label = guided_options[0].selectbox(
             "Organisation des panneaux", ["Panneaux par milieu", "Panneaux par souche"],
             key="guided_figure_panels",
         )
         guided_lum_label = guided_options[1].selectbox(
             "Luminescence", ["Linéaire", "Logarithmique"], key="guided_figure_lum_scale",
+        )
+        guided_show_technical = guided_options[2].checkbox(
+            "Afficher les réplicats techniques",
+            value=True,
+            key="guided_show_technical_replicates",
+            help=("Ajoute un petit point par puits technique dans les figures de synthèse, "
+                  "quel que soit le nombre de réplicats."),
         )
         with st.expander("Hypothèses statistiques directionnelles", expanded=False):
             st.caption(
@@ -292,6 +301,7 @@ def render_guided_results(complete, base: str) -> None:
                 panel_by="Groupe" if guided_panel_label.endswith("milieu") else "souche",
                 lum_scale="log" if guided_lum_label == "Logarithmique" else "linear",
                 directional_comparisons=guided_selected_comparisons,
+                show_technical_replicates=guided_show_technical,
             )
             statistical_results = collect_publication_statistics(guided_figures)
             if guided_selected_comparisons:
@@ -390,7 +400,8 @@ def render_guided_results(complete, base: str) -> None:
                 "la moyenne biologique ± SD. Normalized "
                 "luminescence is blank-corrected RLU divided by blank-corrected OD600. "
                 "Summary boxplots show independent biological experiments and their exact mean; "
-                "small points are technical replicates and large points are biological means. "
+                "Quand leur affichage est activé, les petits points sont les réplicats techniques "
+                "et les grands points les moyennes biologiques. "
                 "Les seules statistiques affichées sont les hypothèses sélectionnées : test t "
                 "apparié unilatéral sur log10 des moyennes biologiques. Chaque comparaison "
                 "planifiée 2 à 2 utilise sa p-value brute pour les étoiles ; la correction de "

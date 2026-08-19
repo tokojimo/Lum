@@ -521,7 +521,8 @@ def _significance_stars(p_value: float) -> str:
 def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, *,
                        metric: str, condition: str, y_scale: str, panel_title: str,
                        seed: int, directional_comparisons: tuple[tuple[str, str], ...] = (),
-                       significant_only: bool = False) -> pd.DataFrame:
+                       significant_only: bool = False,
+                       show_technical_replicates: bool = True) -> pd.DataFrame:
     """Draw one metric panel and return its pairwise statistics."""
     conditions = list(dict.fromkeys(biological[condition].astype(str)))
     if condition == "_comparison":
@@ -551,8 +552,11 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
         axis.annotate(f"{float(np.mean(values)):.3g}", (condition_index, highest),
                       xytext=(0, 7), ha="center", va="bottom", textcoords="offset points",
                       fontsize=7, color=color)
-        axis.plot(condition_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
-                  marker="o", markersize=2.8, color=color, alpha=.32, zorder=2)
+        if show_technical_replicates:
+            # There is deliberately no cap here: unusual plate layouts may
+            # contain dozens of technical wells for one biological condition.
+            axis.plot(condition_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
+                      marker="o", markersize=2.8, color=color, alpha=.32, zorder=2)
 
     identity_columns = [column for column in ("experience_id", "experience")
                         if column in biological and biological[column].notna().any()]
@@ -642,7 +646,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
                        title: str | None = None, group_by: str | None = None,
                        compare_media: bool = False,
                        directional_comparisons: tuple[tuple[str, str], ...] = (),
-                       significant_only: bool = False):
+                       significant_only: bool = False,
+                       show_technical_replicates: bool = True):
     """Plot metric distributions, optionally with one panel per medium or strain."""
     required = {"souche", "Groupe", metric}
     if group_by is not None:
@@ -723,7 +728,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
             metric=metric, condition=condition, y_scale=effective_scale,
             panel_title=panel_title, seed=1947 + index,
             directional_comparisons=directional_comparisons,
-            significant_only=significant_only)
+            significant_only=significant_only,
+            show_technical_replicates=show_technical_replicates)
         if panel is not None:
             statistics = statistics.assign(panel=panel)
         all_statistics.append(statistics)
@@ -740,12 +746,14 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         all_diagnostics.extend(diagnostics)
     for axis in axes.flat[len(panels):]:
         axis.remove()
-    axes.flat[0].legend(handles=[
-        Line2D([], [], marker="o", linestyle="none", markersize=4, alpha=.35,
-               color="#555555", label="Technical replicate"),
-        Line2D([], [], marker="o", linestyle="none", markersize=7,
-               color="#555555", markeredgecolor="white", label="Biological mean"),
-    ], title="Replicate display", frameon=False, fontsize=7, loc="center left",
+    replicate_handles = []
+    if show_technical_replicates:
+        replicate_handles.append(Line2D([], [], marker="o", linestyle="none", markersize=4,
+               alpha=.35, color="#555555", label="Technical replicate"))
+    replicate_handles.append(Line2D([], [], marker="o", linestyle="none", markersize=7,
+               color="#555555", markeredgecolor="white", label="Biological mean"))
+    axes.flat[0].legend(handles=replicate_handles,
+       title="Replicate display", frameon=False, fontsize=7, loc="center left",
        bbox_to_anchor=(1.01, .5))
     if group_by is not None:
         figure.suptitle(title or metric, fontweight="bold", y=.995)
@@ -821,7 +829,8 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     panel_by: str = "Groupe", lum_scale: str = "linear", normalized_scale: str = "linear",
     metric_scale: str = "log", uncertainty: str = "bars", control: str = "P0-lux",
     directional_comparisons: tuple[tuple[str, str], ...] = (),
-    significant_only: bool = False) -> list[tuple[str, object]]:
+    significant_only: bool = False,
+    show_technical_replicates: bool = True) -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
     figures = []
     choices = (("growth", "DO_corr", "croissance", "linear", "Growth"),
@@ -870,13 +879,15 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                         fold_changes, metric=fold_metric, y_scale=metric_scale,
                         title=figure_label, compare_media=True,
                         directional_comparisons=directional_comparisons,
-                        significant_only=significant_only)))
+                        significant_only=significant_only,
+                        show_technical_replicates=show_technical_replicates)))
                 else:
                     scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
                     figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
                         title=figure_label, compare_media=True,
                         directional_comparisons=directional_comparisons,
-                        significant_only=significant_only)))
+                        significant_only=significant_only,
+                        show_technical_replicates=show_technical_replicates)))
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
             uncertainty=uncertainty, title="Targeted control comparison"))
