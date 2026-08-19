@@ -35,6 +35,19 @@ def test_directional_condition_options_exposes_each_box_once():
     }
 
 
+def test_directional_condition_options_excludes_blank_controls():
+    data = pd.DataFrame({
+        "souche": ["P0-lux", "Blanc", "blank-labelled strain"],
+        "Groupe": ["BM2", "BM2", "BM2"],
+        "type": ["souche", " blanc ", "souche"],
+    })
+
+    assert directional_condition_options(data) == {
+        "P0 · BM2": "P0-lux\0BM2",
+        "blank-labelled strain · BM2": "blank-labelled strain\0BM2",
+    }
+
+
 def test_comparison_identifier_repr_contains_the_real_nul_separator():
     identifiers = _comparison_identifiers(
         pd.Series(["14.1Ac attB::PspeD2-1A-lux"]), pd.Series(["BM2"])
