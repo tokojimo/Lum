@@ -138,12 +138,18 @@ def directional_condition_options(data: pd.DataFrame) -> dict[str, str]:
 
     Keeping individual conditions separate lets the interface ask for one
     reference and then its comparators instead of displaying the quadratic
-    list of every possible ordered pair.
+    list of every possible ordered pair.  Blank controls are used during data
+    correction but are not biological conditions and therefore must not be
+    proposed for statistical comparisons.
     """
     if not {"souche", "Groupe"}.issubset(data.columns):
         return {}
+    candidates = data
+    if "type" in candidates.columns:
+        sample_types = candidates["type"].astype(str).str.strip().str.casefold()
+        candidates = candidates.loc[~sample_types.eq("blanc")]
     conditions = list(dict.fromkeys(
-        zip(data["souche"].astype(str), data["Groupe"].map(_medium_label))
+        zip(candidates["souche"].astype(str), candidates["Groupe"].map(_medium_label))
     ))
     return {
         f"{_display_strain(strain)} · {medium}": f"{strain}\0{medium}"

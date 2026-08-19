@@ -540,7 +540,7 @@ with guided_tab:
             st.error(f"Import impossible : {error}")
         else:
             guided_crosstalk = st.checkbox(
-                "Corriger le cross-talk de luminescence — Mauri Dbest", value=False,
+                "Corriger le cross-talk de luminescence — Mauri Dbest", value=True,
                 key="guided_crosstalk",
                 help=("Déconvolution matricielle 96×96 utilisant le kernel Dbest calibré "
                       "sur une plaque mono-source E06."),
