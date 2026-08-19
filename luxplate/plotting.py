@@ -16,7 +16,8 @@ from matplotlib.ticker import FuncFormatter
 from matplotlib.transforms import blended_transform_factory
 
 from luxplate.kinetics import run_kinetics
-from luxplate.statistics import directional_test_diagnostics, paired_directional_t_tests
+from luxplate.statistics import (all_pairwise_comparisons, directional_test_diagnostics,
+                                 paired_directional_t_tests)
 
 
 PUBLICATION_COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000")
@@ -166,6 +167,27 @@ def directional_comparison_options(data: pd.DataFrame) -> dict[str, tuple[str, s
         for right_label, right in conditions.items()
         if left != right
     }
+
+
+def _bracket_levels(intervals: list[tuple[int, int]]) -> list[int]:
+    """Pack short brackets into the lowest non-overlapping levels."""
+    assigned = [0] * len(intervals)
+    occupied: list[list[tuple[int, int]]] = []
+    ordered = sorted(enumerate(intervals), key=lambda item: (
+        abs(item[1][1] - item[1][0]), min(item[1]), max(item[1])
+    ))
+    for original_index, (first, second) in ordered:
+        interval = (min(first, second), max(first, second))
+        for level, existing in enumerate(occupied):
+            if all(max(interval[0], other[0]) >= min(interval[1], other[1])
+                   for other in existing):
+                existing.append(interval)
+                assigned[original_index] = level
+                break
+        else:
+            occupied.append([interval])
+            assigned[original_index] = len(occupied) - 1
+    return assigned
 
 
 def _has_multiple_experiments(data: pd.DataFrame) -> bool:
@@ -526,7 +548,7 @@ def _significance_stars(p_value: float) -> str:
 
 def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, *,
                        metric: str, condition: str, y_scale: str, panel_title: str,
-                       seed: int, directional_comparisons: tuple[tuple[str, str], ...] = (),
+                       seed: int, directional_comparisons: tuple[tuple[str, str], ...] | None = None,
                        significant_only: bool = False,
                        show_technical_replicates: bool = True) -> pd.DataFrame:
     """Draw one metric panel and return its pairwise statistics."""
@@ -625,10 +647,12 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     axis.title.set_fontweight("bold"); axis.title.set_ha("left"); axis.title.set_position((0, 1))
     _publication_style(axis)
 
+    effective_comparisons = (all_pairwise_comparisons(conditions)
+                             if directional_comparisons is None else directional_comparisons)
     comparisons = paired_directional_t_tests(
         biological, value=metric, condition=condition,
         identity=tuple(identity_columns),
-        comparisons=directional_comparisons,
+        comparisons=effective_comparisons,
     )
     positions = {item: index for index, item in enumerate(conditions)}
     usable = comparisons.loc[comparisons["condition_1"].isin(positions)
@@ -636,10 +660,26 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     if significant_only:
         usable = usable.loc[usable["p_raw"] < .05]
     transform = blended_transform_factory(axis.transData, axis.transAxes)
-    spacing = min(.055, .36 / max(1, len(usable)))
-    for level, comparison in enumerate(usable.itertuples(index=False), start=1):
+    intervals = [(positions[row.condition_1], positions[row.condition_2])
+                 for row in usable.itertuples(index=False)]
+    levels = _bracket_levels(intervals)
+    level_count = max(levels, default=-1) + 1
+    # Reserve data-space headroom from the packed level count, rather than the
+    # (potentially quadratic) number of comparisons. This works equivalently
+    # in linear space and in logarithmic space.
+    if condition == "_comparison" and len(finite):
+        if y_scale == "linear":
+            span = max(high - low, abs(high) * .05, 1e-9)
+            axis.set_ylim(low - .12 * span,
+                          high + (.42 + .18 * level_count) * span)
+        else:
+            log_span = max(np.log(high) - np.log(low), .1)
+            axis.set_ylim(np.exp(np.log(low) - .12 * log_span),
+                          np.exp(np.log(high) + (.42 + .18 * level_count) * log_span))
+    spacing = min(.075, .30 / max(1, level_count))
+    for level, comparison in zip(levels, usable.itertuples(index=False)):
         left, right = positions[comparison.condition_1], positions[comparison.condition_2]
-        y = .60 + spacing * level
+        y = .66 + spacing * level
         p_label = _significance_stars(comparison.p_raw)
         axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
                   transform=transform, color="#333333", lw=.7, clip_on=False)
@@ -651,7 +691,7 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
 def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "linear",
                        title: str | None = None, group_by: str | None = None,
                        compare_media: bool = False,
-                       directional_comparisons: tuple[tuple[str, str], ...] = (),
+                       directional_comparisons: tuple[tuple[str, str], ...] | None = None,
                        significant_only: bool = False,
                        show_technical_replicates: bool = True):
     """Plot metric distributions, optionally with one panel per medium or strain."""
@@ -716,8 +756,18 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         condition = "Groupe" if group_by == "souche" else "souche"
     ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
     condition_count = biological[condition].nunique()
-    comparison_count = len(directional_comparisons)
-    extra_height = min(8, .18 * comparison_count) if compare_media else 0
+    height_intervals = list(combinations(range(condition_count), 2))
+    if directional_comparisons is not None:
+        condition_positions = {
+            item: index for index, item in enumerate(dict.fromkeys(biological[condition].astype(str)))
+        }
+        height_intervals = [
+            (condition_positions[left], condition_positions[right])
+            for left, right in directional_comparisons
+            if left in condition_positions and right in condition_positions
+        ]
+    level_count = max(_bracket_levels(height_intervals), default=-1) + 1
+    extra_height = min(8, .28 * level_count) if compare_media else 0
     width = max(6, 1.35 * condition_count) if compare_media else max(6, 4.3 * ncols)
     figure, axes = plt.subplots(nrows, ncols, figsize=(width, (4.5 + extra_height) * nrows), squeeze=False)
     all_statistics = []
@@ -744,7 +794,10 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = "li
         )
         diagnostics = directional_test_diagnostics(
             panel_diagnostic_biological, value=metric, condition=condition,
-            identity=tuple(diagnostic_identity), comparisons=directional_comparisons,
+            identity=tuple(diagnostic_identity),
+            comparisons=(all_pairwise_comparisons(
+                list(dict.fromkeys(panel_biological[condition].astype(str)))
+            ) if directional_comparisons is None else directional_comparisons),
         )
         for diagnostic in diagnostics:
             diagnostic["panel"] = panel
