@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from luxplate.statistics import (all_pairwise_comparisons, directional_test_diagnostics,
-                                 paired_directional_t_tests)
+                                 paired_directional_t_tests, transform_for_statistics)
 
 
 @pytest.mark.parametrize(("conditions", "expected"), [
@@ -52,6 +52,7 @@ def test_directional_tests_use_log10_paired_biological_values_and_holm():
     comparisons = paired_directional_t_tests(
         biological, value="value",
         comparisons=(("reporter", "control"), ("other", "control")),
+        alternative="greater",
     )
 
     expected = pytest.importorskip("scipy.stats").ttest_rel(
@@ -97,10 +98,12 @@ def test_direction_is_preserved_and_no_selection_means_no_test():
     biological = _biological([(1, 2, 3), (2, 4, 6), (4, 9, 12)])
     assert paired_directional_t_tests(biological, value="value", comparisons=()).empty
     forward = paired_directional_t_tests(
-        biological, value="value", comparisons=(("reporter", "control"),)
+        biological, value="value", comparisons=(("reporter", "control"),),
+        alternative="greater",
     )
     reverse = paired_directional_t_tests(
-        biological, value="value", comparisons=(("control", "reporter"),)
+        biological, value="value", comparisons=(("control", "reporter"),),
+        alternative="greater",
     )
     assert forward.loc[0, "p_raw"] < .05
     assert reverse.loc[0, "p_raw"] > .95
@@ -122,6 +125,53 @@ def test_nonpositive_values_are_excluded_and_three_pairs_are_required():
     assert insufficient.loc[0, "significance"] == "NA"
     assert insufficient.loc[0, "calculation_status"] == "non calculable"
     assert "moins de 3 paires" in insufficient.loc[0, "non_calculable_reason"]
+
+
+def test_transform_for_statistics_is_explicit_and_strict():
+    values = np.array([1.0, 10.0, 100.0])
+    np.testing.assert_array_equal(transform_for_statistics(values, "none"), values)
+    np.testing.assert_allclose(transform_for_statistics(values, "log10"), [0, 1, 2])
+    for invalid in ([0.0, 1.0], [-1.0, 1.0], [np.nan, 1.0], [np.inf, 1.0]):
+        with pytest.raises(ValueError):
+            transform_for_statistics(invalid, "log10")
+
+
+def test_raw_and_log10_tests_use_different_inputs_and_results():
+    biological = _biological([(1, 2, 3), (2, 8, 5), (10, 12, 20), (100, 150, 120)])
+    kwargs = {"value": "value", "comparisons": (("reporter", "control"),)}
+    raw = paired_directional_t_tests(biological, transform="none", **kwargs).iloc[0]
+    logged = paired_directional_t_tests(biological, transform="log10", **kwargs).iloc[0]
+    raw_inputs = json.loads(raw["paired_values_json"])
+    logged_inputs = json.loads(logged["paired_values_json"])
+    assert [row["condition_1_transformed"] for row in raw_inputs] == [2, 8, 12, 150]
+    np.testing.assert_allclose(
+        [row["condition_1_transformed"] for row in logged_inputs], np.log10([2, 8, 12, 150])
+    )
+    assert raw["p_raw"] != pytest.approx(logged["p_raw"])
+
+
+def test_log10_pair_diagnostics_count_nonpositive_and_nonfinite_exclusions():
+    biological = _biological([(1, 2, 3), (0, 4, 6), (-1, 8, 12),
+                              (np.nan, 16, 24), (np.inf, 32, 48), (4, 9, 12)])
+    result = paired_directional_t_tests(
+        biological, value="value", transform="log10",
+        comparisons=(("reporter", "control"),),
+    ).iloc[0]
+    assert result[["n_total", "n_used", "n_excluded_nonpositive",
+                   "n_excluded_nonfinite"]].tolist() == [6, 2, 2, 2]
+
+
+def test_historical_greater_log10_test_is_unchanged():
+    biological = _biological([(10, 20, 30), (12, 25, 32), (9, 22, 28), (14, 31, 35)])
+    result = paired_directional_t_tests(
+        biological, value="value", transform="log10", alternative="greater",
+        comparisons=(("reporter", "control"),),
+    ).iloc[0]
+    expected = pytest.importorskip("scipy.stats").ttest_rel(
+        np.log10([20, 25, 22, 31]), np.log10([10, 12, 9, 14]), alternative="greater"
+    )
+    assert result["statistic"] == pytest.approx(expected.statistic)
+    assert result["p_raw"] == pytest.approx(expected.pvalue)
 
 
 def test_conditions_are_matched_canonically_instead_of_silently_disappearing():

@@ -16,12 +16,31 @@ from scipy.stats import ttest_rel
 
 
 RESULT_COLUMNS = [
-    "condition_1", "condition_2", "test", "alternative", "transformation",
-    "value_column", "pairing_columns", "n_pairs", "statistic_t", "degrees_freedom",
-    "mean_log10_difference", "p_raw", "p_holm", "holm_family_size", "alpha",
+    "condition_1", "condition_2", "test", "test_name", "alternative", "transformation",
+    "statistical_transform", "paired", "value_column", "pairing_columns", "n", "n_pairs",
+    "n_total", "n_used", "n_excluded_nonpositive", "n_excluded_nonfinite",
+    "statistic", "statistic_t", "degrees_freedom", "mean_transformed_difference",
+    "mean_log10_difference", "p_raw", "p_adjusted", "p_holm",
+    "multiple_testing_method", "holm_family_size", "alpha",
     "significance", "calculation_status", "non_calculable_reason",
     "paired_values_json",
 ]
+
+STATISTICAL_TRANSFORMS = ("none", "log10")
+
+
+def transform_for_statistics(values, transform: str = "log10") -> np.ndarray:
+    """Transform finite test inputs without filtering or adding an offset."""
+    if transform not in STATISTICAL_TRANSFORMS:
+        raise ValueError(f"Unknown statistical transform: {transform!r}.")
+    result = np.asarray(values, dtype=float)
+    if not np.isfinite(result).all():
+        raise ValueError("Statistical values must be finite.")
+    if transform == "log10":
+        if np.any(result <= 0):
+            raise ValueError("log10 statistical values must be strictly positive.")
+        return np.log10(result)
+    return result.copy()
 
 
 def all_pairwise_comparisons(conditions) -> tuple[tuple[object, object], ...]:
@@ -151,15 +170,23 @@ def _significance(p_value: float) -> str:
 def paired_directional_t_tests(
     biological: pd.DataFrame, *, value: str, condition: str = "souche",
     identity: tuple[str, ...] = ("experience_id", "experience", "biological_replicate_id"),
-    comparisons: tuple[tuple[str, str], ...] | None = None,
+    comparisons: tuple[tuple[str, str], ...] | None = None, transform: str = "log10",
+    alternative: str = "two-sided", multiple_testing_method: str = "Holm",
 ) -> pd.DataFrame:
-    """Test requested, or by default all unique, hypotheses on log10 values.
+    """Test pairs using an explicit transform, independently of plot settings.
 
-    A paired, one-tailed t-test is calculated only for positive, complete
-    biological pairs.  Holm adjustment treats all requested, estimable
+    Complete finite pairs are required. With log10, non-positive pairs are
+    excluded, preserving Lum's historical rule. Holm treats all estimable
     contrasts as one comparison family. Passing an empty tuple explicitly
     disables inference; omitting comparisons tests every unordered pair once.
+    The historical directional test remains available with ``alternative="greater"``.
     """
+    if transform not in STATISTICAL_TRANSFORMS:
+        raise ValueError(f"Unknown statistical transform: {transform!r}.")
+    if alternative not in {"two-sided", "greater", "less"}:
+        raise ValueError("Invalid t-test alternative.")
+    if multiple_testing_method.casefold() != "holm":
+        raise ValueError("Only Holm correction is supported.")
     ids = [column for column in identity
            if column in biological and biological[column].notna().any()]
     ids = ids or [column for column in ("Groupe",) if column in biological]
@@ -191,24 +218,34 @@ def paired_directional_t_tests(
                 missing.append("les deux conditions correspondent à la même boîte")
             rows.append({
                 "condition_1": requested_left, "condition_2": requested_right,
-                "test": "paired t-test", "alternative": "condition_1 > condition_2",
-                "transformation": "log10", "value_column": value,
-                "pairing_columns": "|".join(ids), "n_pairs": 0,
-                "statistic_t": np.nan, "degrees_freedom": np.nan,
-                "mean_log10_difference": np.nan, "p_raw": np.nan, "alpha": .05,
+                "test": "paired t-test", "test_name": "paired_t_test", "alternative": alternative,
+                "transformation": transform, "statistical_transform": transform, "paired": True,
+                "value_column": value, "pairing_columns": "|".join(ids), "n": 0, "n_pairs": 0,
+                "n_total": 0, "n_used": 0, "n_excluded_nonpositive": 0,
+                "n_excluded_nonfinite": 0, "statistic": np.nan, "statistic_t": np.nan,
+                "degrees_freedom": np.nan, "mean_transformed_difference": np.nan,
+                "mean_log10_difference": np.nan, "p_raw": np.nan, "p_adjusted": np.nan,
+                "p_holm": np.nan, "multiple_testing_method": "Holm", "holm_family_size": 0,
+                "alpha": .05,
                 "significance": "NA", "calculation_status": "non calculable",
                 "non_calculable_reason": "; ".join(missing),
                 "paired_values_json": "[]",
             })
             continue
-        pairs = table[[left, right]].replace([np.inf, -np.inf], np.nan).dropna()
-        pairs = pairs.loc[pairs[left].gt(0) & pairs[right].gt(0)]
+        candidates = table[[left, right]]
+        finite = np.isfinite(candidates.to_numpy(float)).all(axis=1)
+        n_nonfinite = int((~finite).sum())
+        pairs = candidates.loc[finite]
+        positive = pairs[left].gt(0) & pairs[right].gt(0)
+        n_nonpositive = int((~positive).sum()) if transform == "log10" else 0
+        if transform == "log10":
+            pairs = pairs.loc[positive]
+        transformed_left = transform_for_statistics(pairs[left], transform)
+        transformed_right = transform_for_statistics(pairs[right], transform)
         enough_pairs = len(pairs) >= 3
         if enough_pairs:
             test_result = ttest_rel(
-                np.log10(pairs[left].to_numpy(float)),
-                np.log10(pairs[right].to_numpy(float)),
-                alternative="greater",
+                transformed_left, transformed_right, alternative=alternative,
             )
             statistic = float(test_result.statistic)
             raw = float(test_result.pvalue)
@@ -221,23 +258,29 @@ def paired_directional_t_tests(
                 **{column: value for column, value in zip(ids, identity_values)},
                 "condition_1_value": float(pair_values[left]),
                 "condition_2_value": float(pair_values[right]),
-                "condition_1_log10": float(np.log10(pair_values[left])),
-                "condition_2_log10": float(np.log10(pair_values[right])),
+                "condition_1_transformed": float(transformed_left[len(paired_records)]),
+                "condition_2_transformed": float(transformed_right[len(paired_records)]),
+                **({
+                    "condition_1_log10": float(transformed_left[len(paired_records)]),
+                    "condition_2_log10": float(transformed_right[len(paired_records)]),
+                } if transform == "log10" else {}),
             })
         rows.append({
             "condition_1": left, "condition_2": right,
-            "test": "paired t-test", "alternative": "condition_1 > condition_2",
-            "transformation": "log10", "value_column": value,
-            "pairing_columns": "|".join(ids), "n_pairs": len(pairs),
-            "statistic_t": statistic,
+            "test": "paired t-test", "test_name": "paired_t_test", "alternative": alternative,
+            "transformation": transform, "statistical_transform": transform, "paired": True,
+            "value_column": value, "pairing_columns": "|".join(ids), "n": len(pairs),
+            "n_pairs": len(pairs), "n_total": len(candidates), "n_used": len(pairs),
+            "n_excluded_nonpositive": n_nonpositive, "n_excluded_nonfinite": n_nonfinite,
+            "statistic": statistic, "statistic_t": statistic,
             "degrees_freedom": len(pairs) - 1 if enough_pairs else float("nan"),
-            "mean_log10_difference": float(
-                (np.log10(pairs[left]) - np.log10(pairs[right])).mean()
-            ) if len(pairs) else float("nan"),
-            "p_raw": raw, "alpha": .05,
+            "mean_transformed_difference": float(np.mean(transformed_left - transformed_right)) if len(pairs) else float("nan"),
+            "mean_log10_difference": float(np.mean(transformed_left - transformed_right)) if len(pairs) and transform == "log10" else float("nan"),
+            "p_raw": raw, "p_adjusted": np.nan, "p_holm": np.nan,
+            "multiple_testing_method": "Holm", "holm_family_size": 0, "alpha": .05,
             "calculation_status": "calculé" if enough_pairs else "non calculable",
             "non_calculable_reason": "" if enough_pairs else (
-                f"moins de 3 paires biologiques positives ({len(pairs)} disponible(s))"
+                f"moins de 3 paires biologiques{' positives' if transform == 'log10' else ' complètes'} ({len(pairs)} disponible(s))"
             ),
             "paired_values_json": json.dumps(paired_records, ensure_ascii=False, default=str),
         })
@@ -254,6 +297,7 @@ def paired_directional_t_tests(
         running = max(running, min(1.0, result.at[index, "p_raw"] * (total - rank)))
         adjusted.at[index] = running
     result["p_holm"] = adjusted
+    result["p_adjusted"] = adjusted
     result["holm_family_size"] = total
     # Each explicitly selected contrast is a separately planned, pairwise
     # hypothesis.  Keep Holm available in the exported audit table, but report
