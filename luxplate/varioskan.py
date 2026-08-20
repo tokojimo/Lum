@@ -63,6 +63,11 @@ def normalize_strain_name(value: object) -> str:
     prefix, separator, construct = name.rpartition("::")
     if not separator:
         prefix, construct = "", name
+    else:
+        # attB is the conventional spelling of the chromosomal attachment
+        # site.  Treat manually entered case variants (notably ``attb``) as
+        # the same strain so they do not appear as duplicate UI choices.
+        prefix = re.sub(r"\battb\b", "attB", prefix, flags=re.IGNORECASE)
 
     wrapped = MINICTX_REPORTER.fullmatch(construct)
     if wrapped:

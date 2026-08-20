@@ -162,6 +162,22 @@ def test_varioskan_0001_suffix_is_removed_without_losing_biological_qualifiers()
     )
 
 
+@pytest.mark.parametrize("attachment_site", ["attb", "attB", "ATTB"])
+def test_attachment_site_case_variants_use_canonical_attB_spelling(attachment_site):
+    assert normalize_strain_name(f"14.1Ac {attachment_site}::P0-lux") == (
+        "14.1Ac attB::P0-lux"
+    )
+
+
+def test_attachment_site_case_variants_collapse_to_one_strain_during_import():
+    headers = ["14.1Ac attB::P0-lux", "14.1Ac attb::P0-lux"]
+
+    strains = parse_kinetic_workbook(workbook_with_strain_headers(headers)).query("type == 'souche'")
+
+    assert strains["souche"].unique().tolist() == ["14.1Ac attB::P0-lux"]
+    assert strains["replicat"].unique().tolist() == [1, 2]
+
+
 def test_lone_varioskan_0001_header_is_canonicalized_during_import():
     headers = ["LB 14.1Ac attB::P0-lux0001"] * 3
 
@@ -239,15 +255,16 @@ def test_ma_complex_reference_structure_has_exactly_three_strains():
 
     strains = parse_kinetic_workbook(workbook_with_strain_headers(headers)).query("type == 'souche'")
 
+    canonical_prefix = "14.1Ac attB::"
     assert strains["souche"].unique().tolist() == [
-        f"{strain_prefix}P0-lux",
-        f"{strain_prefix}PspeD2-1A-lux",
-        f"{strain_prefix}PspeD2-3B-lux",
+        f"{canonical_prefix}P0-lux",
+        f"{canonical_prefix}PspeD2-1A-lux",
+        f"{canonical_prefix}PspeD2-3B-lux",
     ]
     assert strains.groupby("souche")["sample_header"].nunique().to_dict() == {
-        f"{strain_prefix}P0-lux": 22,
-        f"{strain_prefix}PspeD2-1A-lux": 25,
-        f"{strain_prefix}PspeD2-3B-lux": 25,
+        f"{canonical_prefix}P0-lux": 22,
+        f"{canonical_prefix}PspeD2-1A-lux": 25,
+        f"{canonical_prefix}PspeD2-3B-lux": 25,
     }
 
 
