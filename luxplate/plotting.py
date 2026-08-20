@@ -937,8 +937,12 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     directional_comparisons: tuple[tuple[str, str], ...] = (),
     statistical_transform: str = "log10", alternative: str = "two-sided",
     significant_only: bool = False,
-    show_technical_replicates: bool = True) -> list[tuple[str, object]]:
+    show_technical_replicates: bool = True,
+    width_scale: float = 1.0,
+    height_scale: float = 1.0) -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
+    if width_scale <= 0 or height_scale <= 0:
+        raise ValueError("Figure width and height scales must be positive.")
     figures = []
     choices = (("growth", "DO_corr", "croissance", "linear", "Growth"),
                ("corrected", "Lum_corr", "luminescence_corrigee", lum_scale,
@@ -1000,6 +1004,9 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
             uncertainty=uncertainty, title="Targeted control comparison"))
+    for _, figure in figures:
+        width, height = figure.get_size_inches()
+        figure.set_size_inches(width * width_scale, height * height_scale)
     return figures
 
 

@@ -95,6 +95,8 @@ def cached_publication_figures(
     show_technical_replicates: bool,
     statistical_transform: str,
     alternative: str,
+    width_scale: float,
+    height_scale: float,
 ):
     """Reuse publication figures across Streamlit's full-script reruns."""
     return build_publication_figures(
@@ -103,6 +105,7 @@ def cached_publication_figures(
         directional_comparisons=directional_comparisons,
         show_technical_replicates=show_technical_replicates,
         statistical_transform=statistical_transform, alternative=alternative,
+        width_scale=width_scale, height_scale=height_scale,
     )
 
 
@@ -300,6 +303,21 @@ def render_guided_results(complete, base: str) -> None:
             help=("Ajoute un petit point par puits technique dans les figures de synthèse, "
                   "quel que soit le nombre de réplicats."),
         )
+        st.markdown("#### Dimensions des figures")
+        st.caption(
+            "Ajustez séparément la longueur des axes X et Y. Ces dimensions sont aussi "
+            "appliquées aux fichiers téléchargés."
+        )
+        dimension_options = st.columns(2)
+        guided_width_percent = dimension_options[0].slider(
+            "Largeur (axe X)", min_value=50, max_value=200, value=100, step=10,
+            format="%d %%", key="guided_figure_width_percent",
+        )
+        guided_height_percent = dimension_options[1].slider(
+            "Hauteur (axe Y)", min_value=50, max_value=200, value=100, step=10,
+            format="%d %%", key="guided_figure_height_percent",
+            help="Augmentez cette valeur pour obtenir une figure plus longue verticalement.",
+        )
         st.markdown("#### Statistiques")
         statistics_options = st.columns(3)
         guided_test_label = statistics_options[0].selectbox(
@@ -343,6 +361,8 @@ def render_guided_results(complete, base: str) -> None:
                 directional_comparisons=guided_selected_comparisons,
                 show_technical_replicates=guided_show_technical,
                 statistical_transform=guided_transform, alternative=guided_alternative,
+                width_scale=guided_width_percent / 100,
+                height_scale=guided_height_percent / 100,
             )
             statistical_results = collect_publication_statistics(guided_figures)
             if guided_selected_comparisons:
