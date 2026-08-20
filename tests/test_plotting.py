@@ -623,6 +623,53 @@ def test_metric_points_compare_every_strain_medium_pair_in_one_figure():
     plt.close(figure)
 
 
+@pytest.mark.parametrize(("condition_count", "rotation", "font_size"), [
+    (3, 0, 10),
+    (8, 30, 9),
+    (15, 45, 8),
+])
+def test_comparison_tick_labels_adapt_without_changing_categories_or_statistics(
+        condition_count, rotation, font_size):
+    metrics = pd.DataFrame([
+        {"souche": f"Reporter {condition}", "Groupe": f"Medium {condition}",
+         "experience_id": f"exp{experiment}", "lum_norm_auc": 10 + condition + experiment}
+        for experiment in range(1, 4)
+        for condition in range(condition_count)
+    ])
+    expected_conditions = [
+        f"Reporter {condition}\0Medium {condition}" for condition in range(condition_count)
+    ]
+    hypotheses = ((expected_conditions[1], expected_conditions[0]),)
+    expected_statistics = paired_directional_t_tests(
+        metrics.assign(_comparison=_comparison_identifiers(
+            metrics["souche"], metrics["Groupe"])),
+        value="lum_norm_auc", condition="_comparison", identity=("experience_id",),
+        comparisons=hypotheses, transform="log10", alternative="two-sided",
+    )
+
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", compare_media=True,
+        directional_comparisons=hypotheses,
+    )
+    axis = figure.axes[0]
+    labels = axis.get_xticklabels()
+
+    assert [label.get_text() for label in labels] == [
+        f"Reporter {condition}\nMedium {condition}" for condition in range(condition_count)
+    ]
+    assert [label.get_rotation() for label in labels] == [rotation] * condition_count
+    assert [label.get_fontsize() for label in labels] == [font_size] * condition_count
+    assert [label.get_rotation_mode() for label in labels] == (
+        ["default"] * condition_count if condition_count <= 6 else ["anchor"] * condition_count
+    )
+    np.testing.assert_allclose(axis.get_xticks(), range(condition_count))
+    columns = ["condition_1", "condition_2", "statistic", "p_raw", "p_adjusted"]
+    pd.testing.assert_frame_equal(
+        figure._luxplate_statistics[columns], expected_statistics[columns]
+    )
+    plt.close(figure)
+
+
 def test_metric_points_only_draws_selected_directional_hypotheses():
     metrics = pd.DataFrame([
         {"souche": strain, "Groupe": medium, "experience_id": f"exp{experiment}",

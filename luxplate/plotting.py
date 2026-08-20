@@ -651,6 +651,11 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
         else:
             display_conditions.append(_panel_title(item))
     axis.set_xticks(range(len(conditions)), display_conditions)
+    if condition == "_comparison" and len(conditions) > 6:
+        rotation, font_size = ((30, 9) if len(conditions) <= 10 else (45, 8))
+        for label in axis.get_xticklabels():
+            label.set(rotation=rotation, fontsize=font_size, ha="right",
+                      rotation_mode="anchor")
     axis.set(xlabel="Reporter · medium" if condition == "_comparison" else
              ("Reporter" if condition == "souche" else "Medium"),
              ylabel=metric_labels.get(metric, metric), title=panel_title)
@@ -865,6 +870,14 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
         figure._luxplate_statistics["y_scale"] = effective_scale
     figure._luxplate_statistical_diagnostics = all_diagnostics
     figure.tight_layout(rect=(0, 0, 1, .96) if group_by is not None and not compare_media else None)
+    if compare_media and condition_count > 6:
+        # ``tight_layout`` accounts for the renderer's current text extents,
+        # while this small physical minimum also keeps multiline, angled labels
+        # clear of the x-axis title in every raster and vector export backend.
+        label_band_inches = 1.15 if condition_count <= 10 else 1.55
+        minimum_bottom = min(.35, label_band_inches / figure.get_figheight())
+        if figure.subplotpars.bottom < minimum_bottom:
+            figure.subplots_adjust(bottom=minimum_bottom)
     return figure
 
 
