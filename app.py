@@ -773,10 +773,8 @@ with guided_tab:
                               "temps_h", "DO_brute", "Lum_brute"],
                     hide_index=True, use_container_width=True, key="guided_point_editor",
                 )
-                strain_headers = guided_selected.loc[
-                    guided_selected["type"].eq("souche"), "sample_header"
-                ].drop_duplicates().tolist()
-                removed_series = st.multiselect("Courbes entières à supprimer", strain_headers)
+                curve_headers = guided_selected["sample_header"].drop_duplicates().tolist()
+                removed_series = st.multiselect("Courbes entières à supprimer", curve_headers)
 
                 with st.expander("Exclusion simple par expérience et par temps", expanded=True):
                     st.caption(

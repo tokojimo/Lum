@@ -61,6 +61,14 @@ def test_manual_whole_curve_decision_removes_every_series_point():
     assert set(result.kinetics.series_metrics["souche"]) == {"S1"}
 
 
+def test_manual_whole_blank_curve_decision_removes_every_blank_point():
+    data = workflow_table()
+    decisions = build_manual_decisions(data, [], ["Blanc (B01)"])
+    result = run_complete_analysis(data, decisions, consecutive_points=2, growth_window_points=2)
+    assert len(result.blank_correction.excluded_data) == 4
+    assert result.blank_correction.excluded_data["type"].eq("blanc").all()
+
+
 def test_complete_analysis_reports_each_calculation_stage():
     updates = []
     run_complete_analysis(
