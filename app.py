@@ -595,12 +595,67 @@ with guided_tab:
         except Exception as error:
             st.error(f"Import impossible : {error}")
         else:
-            guided_crosstalk = st.checkbox(
-                "Corriger le cross-talk de luminescence — Mauri Dbest", value=True,
-                key="guided_crosstalk",
-                help=("Déconvolution matricielle 96×96 utilisant le kernel Dbest calibré "
-                      "sur une plaque mono-source E06."),
+            selection_identity = tuple(guided_identity)
+            if st.session_state.get("guided_selection_identity") != selection_identity:
+                # A newly uploaded workbook must not silently reuse draft or
+                # validated choices belonging to the preceding dataset.
+                for key in ("guided_media", "guided_strains", "guided_crosstalk"):
+                    st.session_state.pop(key, None)
+                st.session_state.pop("guided_validated_selection", None)
+                st.session_state["guided_selection_identity"] = selection_identity
+
+            strain_options = sorted(
+                guided_data.loc[guided_data["type"].eq("souche"), "souche"].unique()
             )
+            medium_options = sorted(
+                guided_data.loc[guided_data["type"].eq("souche"), "Groupe"].unique()
+            )
+            st.subheader("Sélection de l'analyse")
+            st.caption(
+                "Préparez votre sélection librement : aucun calcul ni graphique ne sera "
+                "relancé avant la validation."
+            )
+            with st.form("guided_selection_form"):
+                guided_crosstalk_draft = st.checkbox(
+                    "Corriger le cross-talk de luminescence — Mauri Dbest", value=True,
+                    key="guided_crosstalk",
+                    help=("Déconvolution matricielle 96×96 utilisant le kernel Dbest calibré "
+                          "sur une plaque mono-source E06."),
+                )
+                selection_columns = st.columns(2)
+                guided_media_draft = selection_columns[0].multiselect(
+                    "Milieux à analyser", medium_options, default=medium_options,
+                    key="guided_media",
+                )
+                guided_strains_draft = selection_columns[1].multiselect(
+                    "Souches à analyser", strain_options, default=strain_options,
+                    key="guided_strains",
+                )
+                selection_submitted = st.form_submit_button(
+                    "Valider la sélection", type="primary",
+                    disabled=not medium_options or not strain_options,
+                    help="L'analyse des milieux et souches choisis commence uniquement ici.",
+                )
+
+            if selection_submitted:
+                st.session_state["guided_validated_selection"] = {
+                    "identity": selection_identity,
+                    "media": tuple(guided_media_draft),
+                    "strains": tuple(guided_strains_draft),
+                    "crosstalk": guided_crosstalk_draft,
+                }
+
+            validated_selection = st.session_state.get("guided_validated_selection")
+            if not validated_selection or validated_selection.get("identity") != selection_identity:
+                st.info(
+                    "Choisissez les milieux et les souches, puis cliquez sur « Valider la "
+                    "sélection » pour démarrer la préparation de l'analyse."
+                )
+                st.stop()
+
+            guided_media = list(validated_selection["media"])
+            guided_strains = list(validated_selection["strains"])
+            guided_crosstalk = bool(validated_selection["crosstalk"])
             if guided_crosstalk:
                 try:
                     guided_data = correct_plate_crosstalk(guided_data)
@@ -608,13 +663,9 @@ with guided_tab:
                     st.error(f"Correction du cross-talk impossible : {error}")
                     st.stop()
                 st.caption("Cross-talk corrigé avec MAURI_E06_BEST.")
-            strain_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "souche"].unique())
-            medium_options = sorted(guided_data.loc[guided_data["type"].eq("souche"), "Groupe"].unique())
-            guided_media = st.multiselect(
-                "Milieux à analyser", medium_options, default=medium_options, key="guided_media",
-            )
-            guided_strains = st.multiselect(
-                "Souches à analyser", strain_options, default=strain_options, key="guided_strains",
+            st.success(
+                f"Sélection validée : {len(guided_media)} milieu(x) et "
+                f"{len(guided_strains)} souche(s)."
             )
             try:
                 guided_selected = filter_experiment_data(guided_data, guided_strains, guided_media)
