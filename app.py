@@ -277,7 +277,12 @@ def render_guided_results(complete, base: str) -> None:
         }
         guided_figure_labels = st.multiselect(
             "Figures finales", list(guided_family_labels),
-            default=list(guided_family_labels), key="guided_figure_families",
+            default=[
+                "Croissance corrigée",
+                "Luminescence non normalisée",
+                "Double axe DO + luminescence non normalisée",
+                "Rapport AUC luminescence / AUC DO",
+            ], key="guided_figure_families",
         )
         st.markdown("#### Affichage")
         guided_options = st.columns(4)
