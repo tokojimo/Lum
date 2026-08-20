@@ -627,6 +627,10 @@ with guided_tab:
                 if st.session_state.get("guided_signature") != guided_signature:
                     st.session_state.pop("guided_complete_result", None)
                     st.session_state.pop("guided_decisions", None)
+                    # A new analysis always starts with the inexpensive blank
+                    # preview.  The other previews are deliberately lazy and
+                    # must be requested again for the new data selection.
+                    st.session_state.pop("guided_figure_view", None)
                     st.session_state["guided_signature"] = guided_signature
                 blanks = guided_selected.loc[guided_selected["type"].eq("blanc")]
                 if blanks.empty:
@@ -643,34 +647,39 @@ with guided_tab:
                 tab_names.extend([
                     "Blancs déconvolués", "Résidu des blancs", "Luminescence corrigée"
                 ])
-                info_tabs = st.tabs(tab_names)
-                with info_tabs[0]:
+                selected_figure = st.radio(
+                    "Figure à afficher",
+                    tab_names,
+                    horizontal=True,
+                    key="guided_figure_view",
+                    help=("Seules les courbes des blancs sont préparées au lancement. "
+                          "Les autres figures sont générées à la demande puis conservées "
+                          "en cache pendant la session."),
+                )
+                if selected_figure == "Courbes des blancs":
                     st.caption(
                         "Une ligne par expérience indépendante (réplicat biologique) ; les courbes d'une "
                         "même ligne sont les réplicats techniques. Les échelles sont identiques entre les lignes."
                     )
                     for _, figure in cached_guided_raw_figures(guided_selected, sample_type="blanc"):
                         st.pyplot(figure, use_container_width=True)
-                with info_tabs[1]:
+                elif selected_figure == "Courbes des échantillons":
                     st.caption(
                         "Une figure par souche et milieu, avec une ligne par fichier Excel (réplicat biologique) "
                         "et toutes ses courbes techniques. Les maxima OD600 et RLU sont communs aux lignes."
                     )
                     for _, figure in cached_guided_raw_figures(guided_selected, sample_type="souche"):
                         st.pyplot(figure, use_container_width=True)
-                next_tab = 2
-                if guided_crosstalk:
-                    with info_tabs[next_tab]:
-                        st.caption(
-                            "Luminescence après correction du cross-talk et avant soustraction "
-                            "des blancs. Cette vue permet d'évaluer directement le modèle optique."
-                        )
-                        for _, figure in cached_guided_crosstalk_figures(
-                            guided_selected, sample_type="blanc"
-                        ):
-                            st.pyplot(figure, use_container_width=True)
-                    next_tab += 1
-                with info_tabs[next_tab]:
+                elif selected_figure == "Après correction du cross-talk":
+                    st.caption(
+                        "Luminescence après correction du cross-talk et avant soustraction "
+                        "des blancs. Cette vue permet d'évaluer directement le modèle optique."
+                    )
+                    for _, figure in cached_guided_crosstalk_figures(
+                        guided_selected, sample_type="blanc"
+                    ):
+                        st.pyplot(figure, use_container_width=True)
+                elif selected_figure == "Blancs déconvolués":
                     st.caption(
                         "Niveau absolu des blancs après correction optique. Il n'est pas recentré : "
                         "ces courbes permettent d'évaluer directement la déconvolution du cross-talk."
@@ -679,7 +688,7 @@ with guided_tab:
                         guided_selected, sample_type="blanc"
                     ):
                         st.pyplot(figure, use_container_width=True)
-                with info_tabs[next_tab + 1]:
+                elif selected_figure == "Résidu des blancs":
                     st.caption(
                         "Contrôle qualité uniquement : Lum_blank_residual soustrait, à chaque temps, "
                         "la moyenne des blancs du même milieu. Sa moyenne vaut zéro par construction."
@@ -688,7 +697,7 @@ with guided_tab:
                         guided_selected, sample_type="blanc", lum_value="Lum_blank_residual"
                     ):
                         st.pyplot(figure, use_container_width=True)
-                with info_tabs[next_tab + 2]:
+                elif selected_figure == "Luminescence corrigée":
                     st.caption(
                         "Courbes des échantillons après soustraction, à chaque temps, de la moyenne "
                         "des blancs du même milieu. La densité optique corrigée est affichée à gauche "
