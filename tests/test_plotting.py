@@ -150,6 +150,33 @@ def test_collect_publication_statistics_is_empty_without_metric_tests():
     plt.close(figure)
 
 
+def test_publication_figure_dimensions_can_be_scaled_independently():
+    data = pd.DataFrame({
+        "temps_h": [0.0, 1.0], "souche": ["P0-lux", "P0-lux"],
+        "sample_header": ["P0", "P0"], "Groupe": ["SCFM2", "SCFM2"],
+        "DO_corr": [0.1, 0.2], "type": ["souche", "souche"],
+    })
+    default = build_publication_figures(data, families=("growth",))[0][1]
+    resized = build_publication_figures(
+        data, families=("growth",), width_scale=1.25, height_scale=1.75
+    )[0][1]
+
+    np.testing.assert_allclose(
+        resized.get_size_inches(), default.get_size_inches() * [1.25, 1.75]
+    )
+    plt.close(default)
+    plt.close(resized)
+
+
+@pytest.mark.parametrize(("width_scale", "height_scale"), [(0, 1), (1, 0), (-1, 1)])
+def test_publication_figure_dimensions_must_be_positive(width_scale, height_scale):
+    with pytest.raises(ValueError, match="must be positive"):
+        build_publication_figures(
+            workflow_table(), families=("growth",),
+            width_scale=width_scale, height_scale=height_scale,
+        )
+
+
 def test_metric_points_can_show_every_technical_replicate_or_hide_them():
     metrics = pd.DataFrame({
         "souche": ["P0-lux"] * 25,
