@@ -74,6 +74,14 @@ def calculate_auc(time_h, values) -> float:
     return float(np.trapezoid(value, time))
 
 
+def calculate_baseline_shifted_auc(time_h, values) -> float:
+    """AUC after translating the lowest finite value to zero."""
+    time, value = _finite_sorted(time_h, values)
+    if time.size < 2:
+        return float("nan")
+    return float(np.trapezoid(value - np.min(value), time))
+
+
 def calculate_peak(time_h, values) -> tuple[float, float]:
     """Return ``(peak, first chronological observed peak time)``."""
     time, value = _finite_sorted(time_h, values)
@@ -159,9 +167,10 @@ def calculate_luminescence_metrics(
     """Calculate luminescence metrics and the ratio of fixed-window AUCs.
 
     ``lum_norm_auc`` is retained as the public column name, but represents
-    ``AUC(Lum_corr) / AUC(DO_corr)``. Both areas use the same jointly finite
-    observations and the same acquisition window. Pointwise ``Lum_norm`` is
-    used only for peak metrics and plotting.
+    ``AUC(Lum_corr) / AUC(DO_corr - min(DO_corr))``. The OD minimum is taken
+    within the common acquisition window. Both areas use the same jointly
+    finite observations and window. Pointwise ``Lum_norm`` is used only for
+    peak metrics and plotting.
     """
     peak, peak_time = calculate_peak(series["temps_h"], series["Lum_norm"])
     finite_norm = np.isfinite(pd.to_numeric(series["Lum_norm"], errors="coerce"))
@@ -175,7 +184,10 @@ def calculate_luminescence_metrics(
     )
     common = np.isfinite(time) & np.isfinite(od) & np.isfinite(lum) & in_window
     auc_time, auc_od, auc_lum = time[common], od[common], lum[common]
-    od_auc = calculate_auc(auc_time, auc_od)
+    # Blank correction can make the first OD observations negative. Translate
+    # the complete common-window OD curve so that its minimum is zero rather
+    # than allowing those observations to subtract from the integrated biomass.
+    od_auc = calculate_baseline_shifted_auc(auc_time, auc_od)
     lum_auc = calculate_auc(auc_time, auc_lum)
     ratio = lum_auc / od_auc if np.isfinite(od_auc) and od_auc > 0 else np.nan
     covers_window = bool(

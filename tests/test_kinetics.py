@@ -9,6 +9,7 @@ from luxplate.kinetics import (
     TECHNICAL_SUMMARY_COLUMNS,
     WARNING_COLUMNS,
     calculate_auc,
+    calculate_baseline_shifted_auc,
     calculate_growth_metrics,
     calculate_peak,
     run_kinetics,
@@ -66,8 +67,11 @@ def test_nonpositive_infinite_and_missing_values_are_excluded():
     assert growth["od_auc"] == pytest.approx(-1.05)
 
     result = run_kinetics(data)
-    assert result.series_metrics.empty
-    assert "non_positive_od_auc" in result.rejected_series.iloc[0]["reason"]
+    row = result.series_metrics.iloc[0]
+    finite = np.isfinite(data["DO_corr"]) & np.isfinite(data["Lum_corr"])
+    expected = calculate_baseline_shifted_auc(data.loc[finite, "temps_h"],
+                                              data.loc[finite, "DO_corr"])
+    assert row["od_auc"] == pytest.approx(expected)
 
 
 def test_duplicate_times_warn_and_break_growth_windows_without_rejecting_global_metrics():
@@ -75,7 +79,9 @@ def test_duplicate_times_warn_and_break_growth_windows_without_rejecting_global_
     data.loc[2, "temps_h"] = 1
     result = run_kinetics(data)
     assert len(result.series_metrics) == 1
-    assert result.series_metrics.iloc[0]["od_auc"] == pytest.approx(calculate_auc(data.temps_h, data.DO_corr))
+    assert result.series_metrics.iloc[0]["od_auc"] == pytest.approx(
+        calculate_baseline_shifted_auc(data.temps_h, data.DO_corr)
+    )
     assert "duplicate_time" in set(result.warnings["code"])
 
 
@@ -145,10 +151,25 @@ def test_normalized_auc_is_ratio_of_corrected_lum_and_od_aucs_on_common_window()
     result = run_kinetics(data)
     row = result.series_metrics.iloc[0]
     expected_lum_auc = calculate_auc(data["temps_h"], data["Lum_corr"])
-    expected_od_auc = calculate_auc(data["temps_h"], data["DO_corr"])
+    expected_od_auc = calculate_baseline_shifted_auc(data["temps_h"], data["DO_corr"])
     assert row["lum_corr_auc"] == pytest.approx(expected_lum_auc)
     assert row["lum_norm_auc"] == pytest.approx(expected_lum_auc / expected_od_auc)
     assert row["n_auc_points"] == len(data)
+
+
+def test_od_auc_translates_the_lowest_value_to_zero_before_integration():
+    time = [0.0, 1.0, 2.0]
+    od = [-0.03, -0.01, 0.05]
+    assert calculate_baseline_shifted_auc(time, od) == pytest.approx(
+        calculate_auc(time, [0.0, 0.02, 0.08])
+    )
+
+    data = kinetic_table().iloc[:4].copy()
+    data["DO_corr"] = [-0.03, -0.01, 0.05, 0.10]
+    result = run_kinetics(data, growth_window_points=2)
+    assert result.series_metrics.iloc[0]["od_auc"] == pytest.approx(
+        calculate_baseline_shifted_auc(data["temps_h"], data["DO_corr"])
+    )
 
 
 def test_auc_ratio_rejects_wells_without_the_shared_experiment_window():
@@ -169,8 +190,10 @@ def test_all_experiments_use_the_complete_span_of_the_shortest_experiment():
 
     expected_long_lum = calculate_auc(long.loc[long["temps_h"] <= 2, "temps_h"],
                                       long.loc[long["temps_h"] <= 2, "Lum_corr"])
-    expected_long_od = calculate_auc(long.loc[long["temps_h"] <= 2, "temps_h"],
-                                     long.loc[long["temps_h"] <= 2, "DO_corr"])
+    expected_long_od = calculate_baseline_shifted_auc(
+        long.loc[long["temps_h"] <= 2, "temps_h"],
+        long.loc[long["temps_h"] <= 2, "DO_corr"],
+    )
     assert rows.loc["long", "lum_norm_auc"] == pytest.approx(expected_long_lum / expected_long_od)
     assert rows.loc["long", "od_auc"] == pytest.approx(expected_long_od)
     assert rows.loc["long", "auc_window_duration_h"] == pytest.approx(2)
