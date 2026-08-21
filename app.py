@@ -10,6 +10,8 @@ import streamlit as st
 from luxplate.blanks import run_blank_correction
 from luxplate.crosstalk import correct_plate_crosstalk
 from luxplate.export import package_figures
+from luxplate.figure_lifecycle import (invalidate_guided_analysis_state,
+                                       validate_figure_render)
 from luxplate.plotting import (build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
                                build_publication_figures, collect_publication_statistics,
@@ -85,7 +87,6 @@ def cached_guided_crosstalk_figures(data: pd.DataFrame, sample_type: str):
     return build_guided_crosstalk_figures(data, sample_type=sample_type)
 
 
-@st.cache_data(show_spinner="Préparation des figures…", max_entries=12)
 def cached_publication_figures(
     data: pd.DataFrame,
     title: str,
@@ -100,7 +101,13 @@ def cached_publication_figures(
     width_scale: float,
     height_scale: float,
 ):
-    """Reuse publication figures across Streamlit's full-script reruns."""
+    """Create fresh publication figures for the current Streamlit render.
+
+    The expensive scientific result passed in ``data`` is already cached by
+    ``cached_complete_analysis``.  Figure instances themselves must not enter
+    ``st.cache_data``: Matplotlib and render/export operations mutate them and a
+    later rerun could consequently receive a closed or stale canvas.
+    """
     return build_publication_figures(
         data, title=title, families=families, panel_by=panel_by, lum_scale=lum_scale,
         metric_scale=metric_scale,
@@ -371,12 +378,17 @@ def render_guided_results(complete, base: str) -> None:
                 width_scale=guided_width_percent / 100,
                 height_scale=guided_height_percent / 100,
             )
+            assert guided_figures, "La construction n'a produit aucune figure."
             statistical_results = collect_publication_statistics(guided_figures)
             def display_condition(item):
                 parts = item if isinstance(item, tuple) else str(item).split("\0", 1)
                 return " · ".join(map(str, parts))
             for guided_name, guided_figure in guided_figures:
                 st.subheader(guided_name.replace("_", " ").title())
+                render_diagnostic = validate_figure_render(guided_figure)
+                # Kept out of the normal interface, but available in server
+                # logs when diagnosing a deployment-specific renderer issue.
+                print(f"LuxPlate figure {guided_name}: {render_diagnostic}")
                 st.pyplot(guided_figure, use_container_width=True)
                 statistics = getattr(guided_figure, "_luxplate_statistics", pd.DataFrame())
                 if not statistics.empty:
@@ -711,12 +723,10 @@ with guided_tab:
                     tuple(validated_pairs["mapping"].itertuples(index=False, name=None)),
                 )
                 if st.session_state.get("guided_signature") != guided_signature:
-                    st.session_state.pop("guided_complete_result", None)
-                    st.session_state.pop("guided_decisions", None)
+                    invalidate_guided_analysis_state(st.session_state)
                     # A new analysis always starts with the inexpensive blank
                     # preview.  The other previews are deliberately lazy and
                     # must be requested again for the new data selection.
-                    st.session_state.pop("guided_figure_view", None)
                     st.session_state["guided_signature"] = guided_signature
                 blanks = guided_selected.loc[guided_selected["type"].eq("blanc")]
                 if blanks.empty:
