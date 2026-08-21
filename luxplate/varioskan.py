@@ -42,6 +42,10 @@ TECHNICAL_SUFFIXES = (
     re.compile(r"(?:\d+)$"),
 )
 NUMBERED_LUX_SERIES = re.compile(r"^(.*-lux)(\d{4})$", flags=re.IGNORECASE)
+BIOLOGICAL_REPLICATE_MARKER = re.compile(
+    r"(?:^|[_\-\s])rep(?:licat|licate)?[_\-\s]*0*(\d+)(?:$|[_\-\s])",
+    flags=re.IGNORECASE,
+)
 
 
 def clean_text(value: object) -> str:
@@ -328,3 +332,34 @@ def combine_kinetic_tables(
     if not combined:
         raise ValueError("Ajoutez au moins un classeur à analyser.")
     return pd.concat(combined, ignore_index=True, sort=False)
+
+
+def suggest_biological_pair_id(experience: object) -> str:
+    """Suggest an editable cross-file biological identity from a run name.
+
+    This is deliberately only a UI proposal.  In particular, file order and
+    equal cohort sizes are never used to manufacture pairs.  An unnumbered run
+    is proposed as the conventional first replicate, while explicit ``repN``
+    markers retain their number.
+    """
+    match = BIOLOGICAL_REPLICATE_MARKER.search(clean_text(experience))
+    return f"bio{int(match.group(1))}" if match else "bio1"
+
+
+def assign_biological_pair_ids(
+    data: pd.DataFrame, mapping: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach user-validated biological pair identities to imported rows."""
+    required = {"experience", "biological_pair_id"}
+    if not required.issubset(mapping.columns) or "experience" not in data:
+        raise ValueError("La table d'appariement biologique est incomplète.")
+    pairs = mapping[list(required)].copy()
+    pairs["experience"] = pairs["experience"].map(clean_text)
+    pairs["biological_pair_id"] = pairs["biological_pair_id"].map(clean_text)
+    if pairs["experience"].duplicated().any():
+        raise ValueError("Chaque fichier doit apparaître une seule fois dans la table d'appariement.")
+    expected = set(data["experience"].map(clean_text).unique())
+    if set(pairs["experience"]) != expected or pairs["biological_pair_id"].eq("").any():
+        raise ValueError("Renseignez un réplicat biologique non vide pour chaque fichier.")
+    result = data.drop(columns="biological_pair_id", errors="ignore").copy()
+    return result.merge(pairs, on="experience", how="left", validate="many_to_one")

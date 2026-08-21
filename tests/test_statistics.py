@@ -222,6 +222,37 @@ def test_real_bm2_construct_names_match_reporter_metric_columns():
     assert result["non_calculable_reason"].eq("").all()
 
 
+def test_explicit_cross_file_biological_pairs_match_scfm2_and_kpi_runs():
+    """Regression: paired inference must not use the six different filenames."""
+    runs = (
+        ("260616_SCFM2_screening_rep1", "SCFM2", "bio1", 254293.95),
+        ("260616_SCFM2_screening_rep2", "SCFM2", "bio2", 210371.33),
+        ("260618_SCFM2_screening_rep3", "SCFM2", "bio3", 216550.87),
+        ("260616_SCFM2kpi-80DMEM", "SCFM2-KPi", "bio1", 28787381.99),
+        ("260616_SCFM2kpi-80DMEM_Rep2", "SCFM2-KPi", "bio2", 24667709.22),
+        ("260616_SCFM2kpi-80DMEM_Rep3", "SCFM2-KPi", "bio3", 21166981.06),
+    )
+    biological = pd.DataFrame(runs, columns=(
+        "experience", "condition", "biological_pair_id", "value"
+    ))
+
+    result = paired_directional_t_tests(
+        biological, value="value", condition="condition",
+        comparisons=(("SCFM2", "SCFM2-KPi"),),
+    )
+    diagnostic = directional_test_diagnostics(
+        biological, value="value", condition="condition",
+        comparisons=(("SCFM2", "SCFM2-KPi"),),
+    )[0]
+
+    assert result.loc[0, "pairing_columns"] == "biological_pair_id"
+    assert result.loc[0, "n_pairs"] == 3
+    assert diagnostic["complete_pairs"] == 3
+    assert diagnostic["pair_table"]["biological_pair_id"].tolist() == ["bio1", "bio2", "bio3"]
+    assert diagnostic["pair_table"]["experience_A"].tolist() == [run[0] for run in runs[:3]]
+    assert diagnostic["pair_table"]["experience_B"].tolist() == [run[0] for run in runs[3:]]
+
+
 def test_unmatched_validated_condition_is_reported_with_a_reason():
     biological = _biological([(1, 2, 3), (2, 4, 6), (4, 9, 12)])
 
