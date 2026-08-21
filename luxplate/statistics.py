@@ -59,11 +59,26 @@ def _paired_value_table(
     ``A\0M2`` can never collapse into the same pivot column.
     """
     columns = []
-    for item in dict.fromkeys(biological[condition].astype(str)):
-        selected = biological.loc[biological[condition].astype(str).eq(item)]
+    for item in dict.fromkeys(biological[condition]):
+        selected = biological.loc[biological[condition].map(lambda candidate: candidate == item)]
         series = selected.groupby(ids, dropna=False)[value].mean().rename(item)
         columns.append(series)
-    return pd.concat(columns, axis=1) if columns else pd.DataFrame()
+    if not columns:
+        return pd.DataFrame()
+    result = pd.concat(columns, axis=1)
+    # A list of 2-tuples is normally promoted to a pandas MultiIndex.  Force a
+    # plain object Index: the tuple is one atomic scientific condition.
+    result.columns = pd.Index(np.asarray([series.name for series in columns], dtype=object))
+    return result
+
+
+def _biological_identity(biological: pd.DataFrame,
+                         candidates: tuple[str, ...]) -> list[str]:
+    """Select one real biological identity, in explicit priority order."""
+    for column in candidates:
+        if column in biological and biological[column].notna().any():
+            return [column]
+    return []
 
 
 def directional_test_diagnostics(
@@ -77,9 +92,7 @@ def directional_test_diagnostics(
     an audit aid for the Streamlit interface, built from the same biological
     table, condition column, and identity candidates as the real test.
     """
-    ids = [column for column in identity
-           if column in biological and biological[column].notna().any()]
-    ids = ids or [column for column in ("Groupe",) if column in biological]
+    ids = _biological_identity(biological, identity)
     pivot_columns: list[object] = []
     if ids and condition in biological and value in biological:
         pivot_columns = list(_paired_value_table(biological, ids, condition, value).columns)
@@ -94,19 +107,25 @@ def directional_test_diagnostics(
          "lum_norm_peak", "lum_norm_auc")
         if column in biological
     ]
-    target = biological.iloc[0:0][row_columns].copy()
-    if "souche" in biological and "Groupe" in biological:
-        reporter = biological["souche"].astype(str).map(
-            lambda item: _canonical_condition(item).split("\0", 1)[0]
-        )
-        medium = biological["Groupe"].astype(str).map(
-            lambda item: _canonical_condition("x\0" + item).split("\0", 1)[-1]
-        )
-        wanted = {"p0-lux", "p0", "psped2-1a-lux", "psped2-1a",
-                  "psped2-3b-lux", "psped2-3b"}
-        target = biological.loc[reporter.isin(wanted) & medium.eq("bm2"), row_columns].copy()
-
-    return [{
+    diagnostics = []
+    table = (_paired_value_table(biological, ids, condition, value)
+             if ids and value in biological else pd.DataFrame())
+    canonical_columns = {_canonical_condition(column): column for column in table.columns}
+    for requested_left, requested_right in comparisons:
+        left = canonical_columns.get(_canonical_condition(requested_left))
+        right = canonical_columns.get(_canonical_condition(requested_right))
+        if left is not None and right is not None:
+            pair_table = pd.concat([table[left], table[right]], axis=1)
+            pair_table.columns = ["A", "B"]
+            pair_table = pair_table.reset_index()
+        else:
+            pair_table = pd.DataFrame()
+        complete = pair_table[["A", "B"]].notna().all(axis=1) if not pair_table.empty else pd.Series(dtype=bool)
+        finite = (np.isfinite(pair_table[["A", "B"]].to_numpy(float)).all(axis=1)
+                  if not pair_table.empty else np.array([], dtype=bool))
+        positive = ((pair_table["A"] > 0) & (pair_table["B"] > 0)
+                    if not pair_table.empty else pd.Series(dtype=bool))
+        diagnostics.append({
         "requested_left": requested_left,
         "canonical_left": _canonical_condition(requested_left),
         "requested_right": requested_right,
@@ -119,13 +138,22 @@ def directional_test_diagnostics(
             for column in pivot_columns
         ],
         "unique_values": unique_values,
-        "biological_rows": target,
-    } for requested_left, requested_right in comparisons]
+        "biological_rows": biological[row_columns].copy(),
+        "pair_table": pair_table,
+        "condition_a": left,
+        "condition_b": right,
+        "complete_pairs": int(complete.sum()),
+        "finite_pairs": int(np.sum(complete.to_numpy() & finite)) if len(complete) else 0,
+        "positive_pairs": int(np.sum(complete.to_numpy() & finite & positive.to_numpy())) if len(complete) else 0,
+        "only_a": pair_table.loc[pair_table["A"].notna() & pair_table["B"].isna(), ids].to_dict("records") if not pair_table.empty else [],
+        "only_b": pair_table.loc[pair_table["A"].isna() & pair_table["B"].notna(), ids].to_dict("records") if not pair_table.empty else [],
+    })
+    return diagnostics
 
 
 def _canonical_condition(value: object) -> str:
     """Normalize a UI/figure condition without changing its scientific identity."""
-    parts = str(value).split("\0", 1)
+    parts = list(value) if isinstance(value, tuple) and len(value) == 2 else str(value).split("\0", 1)
     normalized = []
     for index, part in enumerate(parts):
         text = " ".join(part.strip().split())
@@ -187,9 +215,7 @@ def paired_directional_t_tests(
         raise ValueError("Invalid t-test alternative.")
     if multiple_testing_method.casefold() != "holm":
         raise ValueError("Only Holm correction is supported.")
-    ids = [column for column in identity
-           if column in biological and biological[column].notna().any()]
-    ids = ids or [column for column in ("Groupe",) if column in biological]
+    ids = _biological_identity(biological, identity)
     if not ids or condition not in biological or value not in biological:
         return pd.DataFrame(columns=RESULT_COLUMNS)
 

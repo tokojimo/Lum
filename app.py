@@ -370,111 +370,71 @@ def render_guided_results(complete, base: str) -> None:
                 height_scale=guided_height_percent / 100,
             )
             statistical_results = collect_publication_statistics(guided_figures)
-            if guided_selected_comparisons:
-                st.subheader("Tests statistiques")
-                if statistical_results.empty:
-                    st.warning(
-                        "Aucun test n'est disponible avec les figures sélectionnées. "
-                        "Ajoutez au moins une figure de synthèse (pic, temps du pic, "
-                        "AUC ou temps de doublement)."
-                    )
-                else:
-                    visible_statistics = statistical_results.copy()
-                    for column in ("condition_1", "condition_2"):
-                        visible_statistics[column] = visible_statistics[column].str.replace(
-                            "\0", " · ", regex=False
-                        )
-                    st.dataframe(
-                        visible_statistics[["figure", "condition_1", "condition_2", "test",
-                                            "alternative", "statistical_transform", "n_pairs",
-                                            "p_raw", "p_adjusted", "multiple_testing_method",
-                                            "significance", "calculation_status",
-                                            "non_calculable_reason"]].rename(columns={
-                            "figure": "Mesure", "condition_1": "Condition A",
-                            "condition_2": "Condition B", "test": "Test",
-                            "alternative": "Alternative", "statistical_transform": "Transformation",
-                            "n_pairs": "Paires biologiques", "p_raw": "p brute",
-                            "p_adjusted": "p ajustée", "multiple_testing_method": "Correction",
-                            "significance": "Résultat",
-                            "calculation_status": "Statut",
-                            "non_calculable_reason": "Raison si non calculable",
-                        }),
-                        use_container_width=True, hide_index=True,
-                    )
-                    st.download_button(
-                        "Exporter les statistiques (.csv)",
-                        statistical_results.to_csv(index=False).encode("utf-8-sig"),
-                        f"{base}_statistiques.csv", "text/csv",
-                        key="guided_statistics_export",
-                    )
-                    if statistical_results["p_raw"].isna().any():
-                        st.info(
-                            "Les lignes « NA » ne disposent pas des trois paires biologiques "
-                            "positives requises pour calculer le test."
-                        )
-                diagnostics = [
-                    (figure_name, diagnostic)
-                    for figure_name, figure in guided_figures
-                    for diagnostic in getattr(figure, "_luxplate_statistical_diagnostics", [])
-                ]
-                with st.expander("Diagnostic statistiques", expanded=False):
-                    st.caption(
-                        "Valeurs exactes transmises au test, issues des tables biologiques "
-                        "des figures (aucune correction ni substitution n'est appliquée ici)."
-                    )
-                    if not diagnostics:
-                        st.info("Aucune figure statistique sélectionnée ne fournit de diagnostic.")
-                    for index, (figure_name, diagnostic) in enumerate(diagnostics, start=1):
-                        st.markdown(
-                            f"#### {index}. {figure_name} — `{diagnostic['metric']}`"
-                        )
-                        st.markdown("**requested_left repr:**")
-                        st.code(repr(diagnostic["requested_left"]), language=None)
-                        st.markdown("**canonical(requested_left):**")
-                        st.code(diagnostic["canonical_left"], language=None)
-                        st.markdown("**requested_right repr:**")
-                        st.code(repr(diagnostic["requested_right"]), language=None)
-                        st.markdown("**canonical(requested_right):**")
-                        st.code(diagnostic["canonical_right"], language=None)
-                        st.write("**Colonne condition utilisée :**", diagnostic["condition_column"])
-                        st.write("**Colonnes identity utilisées :**", diagnostic["identity_columns"])
-                        st.markdown("**Colonnes exactes du pivot :**")
-                        st.dataframe(pd.DataFrame(diagnostic["pivot_columns"]),
-                                     use_container_width=True, hide_index=True)
-                        for column, values in diagnostic["unique_values"].items():
-                            st.markdown(f'**Valeurs uniques de biological["{column}"] :**')
-                            st.code("\n".join(repr(value) for value in values) or "<colonne absente/vide>",
-                                    language=None)
-                        st.markdown(
-                            "**Lignes biologiques P0, PspeD2-1A et PspeD2-3B en BM2 :**"
-                        )
-                        st.dataframe(diagnostic["biological_rows"],
-                                     use_container_width=True, hide_index=True)
-                        st.download_button(
-                            "Télécharger ces lignes biologiques (.csv)",
-                            diagnostic["biological_rows"].to_csv(index=False).encode("utf-8-sig"),
-                            f"diagnostic_statistiques_{index}.csv", "text/csv",
-                            key=f"guided_statistics_diagnostic_download_{index}",
-                        )
-                        st.divider()
+            def display_condition(item):
+                parts = item if isinstance(item, tuple) else str(item).split("\0", 1)
+                return " · ".join(map(str, parts))
             for guided_name, guided_figure in guided_figures:
                 st.subheader(guided_name.replace("_", " ").title())
                 st.pyplot(guided_figure, use_container_width=True)
                 statistics = getattr(guided_figure, "_luxplate_statistics", pd.DataFrame())
                 if not statistics.empty:
+                    visible_statistics = statistics.copy()
+                    for column in ("condition_1", "condition_2"):
+                        visible_statistics[column] = visible_statistics[column].map(display_condition)
                     st.dataframe(
-                        statistics[["condition_1", "condition_2", "test", "alternative",
+                        visible_statistics[["condition_1", "condition_2", "test", "alternative",
                                     "statistical_transform", "n_pairs", "p_raw", "p_adjusted",
-                                    "significance"]].rename(columns={
+                                    "significance", "calculation_status",
+                                    "non_calculable_reason"]].rename(columns={
                             "condition_1": "Condition A", "condition_2": "Condition B",
                             "test": "Test", "alternative": "Alternative",
                             "statistical_transform": "Transformation",
                             "n_pairs": "Paires biologiques", "p_raw": "p brute",
                             "p_adjusted": "p ajustée Holm",
                             "significance": "Résultat",
+                            "calculation_status": "Statut",
+                            "non_calculable_reason": "Raison si non calculable",
                         }),
                         use_container_width=True, hide_index=True,
                     )
+                diagnostics = getattr(guided_figure, "_luxplate_statistical_diagnostics", [])
+                if diagnostics:
+                    with st.expander("Diagnostic statistique", expanded=False):
+                        for diagnostic in diagnostics:
+                            left = diagnostic.get("condition_a") or diagnostic["requested_left"]
+                            right = diagnostic.get("condition_b") or diagnostic["requested_right"]
+                            st.markdown(f"**Condition A :** {display_condition(left)}")
+                            st.markdown(f"**Condition B :** {display_condition(right)}")
+                            st.markdown(
+                                "**Identité biologique utilisée :** "
+                                + " + ".join(diagnostic["identity_columns"])
+                            )
+                            st.dataframe(diagnostic["pair_table"], use_container_width=True, hide_index=True)
+                            used = (diagnostic["positive_pairs"] if guided_transform == "log10"
+                                    else diagnostic["finite_pairs"])
+                            st.write(f"Paires complètes : {diagnostic['complete_pairs']}")
+                            st.write(f"Paires utilisées : {used}")
+                            st.write(
+                                "Paires éliminées (valeur non finie) : ",
+                                diagnostic["complete_pairs"] - diagnostic["finite_pairs"],
+                            )
+                            if guided_transform == "log10":
+                                st.write(
+                                    "Paires éliminées (valeur ≤ 0) : ",
+                                    diagnostic["finite_pairs"] - diagnostic["positive_pairs"],
+                                )
+                            if diagnostic["only_a"]:
+                                st.write("Expériences présentes uniquement dans A :", diagnostic["only_a"])
+                            if diagnostic["only_b"]:
+                                st.write("Expériences présentes uniquement dans B :", diagnostic["only_b"])
+                            st.divider()
+            if not statistical_results.empty:
+                st.download_button(
+                    "Exporter les statistiques (.csv)",
+                    statistical_results.to_csv(index=False).encode("utf-8-sig"),
+                    f"{base}_statistiques.csv", "text/csv",
+                    key="guided_statistics_export",
+                )
             st.caption(
                 "Les temps séparés de moins d'une minute sont alignés avant le tracé. Les puits "
                 "techniques sont moyennés dans chaque réplicat biologique, puis les courbes montrent "
