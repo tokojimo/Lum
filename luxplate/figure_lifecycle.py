@@ -37,7 +37,17 @@ def validate_figure_render(figure: Figure) -> dict[str, object]:
     if not figure.axes:
         raise AssertionError("A publication figure has no axes")
 
-    populated_axes = sum(bool(axis.lines or axis.collections) for axis in figure.axes)
+    # A metric panel is primarily made of boxplot patches and scatter
+    # collections; brackets and technical points are optional.  Checking all
+    # artist families prevents a perfectly valid box-only plot from being
+    # rejected, while still detecting a figure whose axes were cleared by a
+    # stale/mutated cached Figure instance.
+    populated_axes = sum(
+        bool(axis.lines or axis.collections or axis.patches or axis.artists)
+        for axis in figure.axes
+    )
+    if not populated_axes:
+        raise AssertionError("A publication figure has no visible plot artists")
     output = BytesIO()
     figure.savefig(output, format="png")
     png_size = output.tell()

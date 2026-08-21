@@ -1,3 +1,5 @@
+from io import BytesIO
+
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -19,6 +21,26 @@ def publication_table():
                     "Lum_norm": (100 + 50 * time + 20 * strain_index) / od,
                 })
     return pd.DataFrame(rows)
+
+
+def auc_figure(data, **statistics):
+    if "directional_comparisons" not in statistics:
+        conditions = list(directional_condition_options(data).values())
+        statistics["directional_comparisons"] = ((conditions[0], conditions[1]),)
+    figures = dict(build_publication_figures(data, families=("auc",), **statistics))
+    return figures["auc_luminescence_normalisee"]
+
+
+def assert_visible_auc(figure):
+    assert figure.axes
+    assert any(
+        axis.lines or axis.collections or axis.patches or axis.artists
+        for axis in figure.axes
+    )
+    assert hasattr(figure, "_luxplate_statistics")
+    output = BytesIO()
+    figure.savefig(output, format="png")
+    assert output.tell() > 0
 
 
 def test_selection_change_discards_all_old_directional_widget_state():
@@ -74,3 +96,36 @@ def test_removed_medium_can_be_followed_by_rebuilt_nonempty_auc_figures():
     for _, figures in cycles:
         for _, figure in figures:
             plt.close(figure)
+
+
+def test_auc_remains_visible_after_statistical_parameters_change():
+    data = pd.concat(
+        [publication_table().assign(experience_id=f"exp-{index}") for index in range(3)],
+        ignore_index=True,
+    )
+
+    first = auc_figure(data, statistical_transform="log10", alternative="two-sided")
+    rebuilt = auc_figure(data, statistical_transform="none", alternative="greater")
+
+    assert first is not rebuilt
+    assert_visible_auc(first)
+    assert_visible_auc(rebuilt)
+    assert not rebuilt._luxplate_statistics.empty
+    assert rebuilt._luxplate_statistics["alternative"].eq("greater").all()
+    assert rebuilt._luxplate_statistics["statistical_transform"].eq("none").all()
+    plt.close(first)
+    plt.close(rebuilt)
+
+
+def test_auc_remains_visible_when_comparisons_are_not_calculable():
+    # One biological experiment cannot support a paired t-test, but its boxes
+    # and points must still be rendered and its diagnostic row retained.
+    figure = auc_figure(
+        publication_table(), statistical_transform="log10", alternative="two-sided"
+    )
+
+    assert_visible_auc(figure)
+    assert not figure._luxplate_statistics.empty
+    assert figure._luxplate_statistics["p_raw"].isna().all()
+    assert figure._luxplate_statistics["calculation_status"].eq("non calculable").all()
+    plt.close(figure)

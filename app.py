@@ -389,7 +389,9 @@ def render_guided_results(complete, base: str) -> None:
                 # Kept out of the normal interface, but available in server
                 # logs when diagnosing a deployment-specific renderer issue.
                 print(f"LuxPlate figure {guided_name}: {render_diagnostic}")
-                st.pyplot(guided_figure, use_container_width=True)
+                # Be explicit: Streamlit must not clear this mutable Figure;
+                # it is still needed below for statistics and export.
+                st.pyplot(guided_figure, use_container_width=True, clear_figure=False)
                 statistics = getattr(guided_figure, "_luxplate_statistics", pd.DataFrame())
                 if not statistics.empty:
                     visible_statistics = statistics.copy()
