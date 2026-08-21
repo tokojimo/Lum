@@ -116,12 +116,12 @@ def test_directional_condition_options_excludes_blank_controls():
     }
 
 
-def test_comparison_identifier_repr_contains_the_real_nul_separator():
+def test_comparison_identifier_keeps_components_as_an_atomic_tuple():
     identifiers = _comparison_identifiers(
         pd.Series(["14.1Ac attB::PspeD2-1A-lux"]), pd.Series(["BM2"])
     )
 
-    assert repr(identifiers.iloc[0]) == "'14.1Ac attB::PspeD2-1A-lux\\x00BM2'"
+    assert identifiers.iloc[0] == ("14.1Ac attB::PspeD2-1A-lux", "BM2")
 
 
 def test_collect_publication_statistics_makes_one_visible_table():
@@ -686,7 +686,7 @@ def test_metric_points_only_draws_selected_directional_hypotheses():
     )
     assert len(selected._luxplate_statistics) == 1
     comparison = selected._luxplate_statistics.iloc[0]
-    assert (comparison.condition_1, comparison.condition_2) == conditions[0]
+    assert (comparison.condition_1, comparison.condition_2) == (("A", "M2"), ("A", "M1"))
     labels = [text.get_text() for text in selected.axes[0].texts
               if text.get_text() in {"ns", "*", "**", "***", "****"}]
     assert len(labels) == 1
@@ -750,7 +750,11 @@ def test_bm2_auc_three_validated_hypotheses_produce_rows_and_brackets():
 
     statistics = figure._luxplate_statistics
     assert len(statistics) == 3
-    assert list(zip(statistics["condition_1"], statistics["condition_2"])) == list(hypotheses)
+    assert list(zip(statistics["condition_1"], statistics["condition_2"])) == [
+        (("PspeD2-1A-lux", "BM2"), ("P0-lux", "BM2")),
+        (("PspeD2-3B-lux", "BM2"), ("P0-lux", "BM2")),
+        (("PspeD2-1A-lux", "BM2"), ("PspeD2-3B-lux", "BM2")),
+    ]
     assert statistics["calculation_status"].eq("calculé").all()
     annotation_labels = [
         text.get_text() for text in figure.axes[0].texts
@@ -823,6 +827,57 @@ def test_real_ui_nul_conditions_keep_three_workbook_biological_pairs():
     assert result["n_pairs"].tolist() == [3, 3, 3], diagnostic
     assert result["calculation_status"].eq("calculé").all(), diagnostic
     assert result["pairing_columns"].eq("experience").all(), diagnostic
+    plt.close(figure)
+
+
+def test_scfm2_screening_conditions_have_three_biological_pairs():
+    """Regression for the full imported reporter id and expN|medium groups."""
+    strain = "14.1Ac attB::PspeD2-1A-lux"
+    media = ("SCFM2", "SCFM2 (i)", "SCFM2 (M)", "SCFM2 (c)", "SCFM2 (Aa)")
+    metrics = pd.DataFrame([
+        {
+            "souche": strain,
+            "Groupe": f"exp{experiment}|{medium}",
+            "experience": f"screening-{experiment}",
+            "replicat": technical,
+            "lum_norm_auc": 100 + experiment * 10 + medium_index + technical / 10,
+        }
+        for experiment in (1, 2, 3)
+        for medium_index, medium in enumerate(media)
+        for technical in (1, 2, 3)
+    ])
+    options = directional_condition_options(metrics)
+    control = options["PspeD2-1A · SCFM2"]
+    comparisons = tuple(
+        (control, options[f"PspeD2-1A · {medium}"])
+        for medium in media[1:]
+    )
+
+    figure = plot_metric_points(
+        metrics, metric="lum_norm_auc", compare_media=True,
+        directional_comparisons=comparisons,
+    )
+
+    assert figure._luxplate_statistics["n_pairs"].tolist() == [3, 3, 3, 3]
+    assert figure._luxplate_statistics["pairing_columns"].eq("experience").all()
+    plt.close(figure)
+
+
+def test_tuple_conditions_with_common_reporter_are_never_merged():
+    metrics = pd.DataFrame([
+        {"souche": "Reporter", "Groupe": medium, "experience": f"exp{bio}",
+         "lum_norm_auc": bio + medium_index}
+        for bio in (1, 2, 3)
+        for medium_index, medium in enumerate(("SCFM2", "SCFM2 (i)", "SCFM2 (M)"))
+    ])
+    figure = plot_metric_points(metrics, metric="lum_norm_auc", compare_media=True)
+    conditions = set(figure._luxplate_statistics["condition_1"]) | set(
+        figure._luxplate_statistics["condition_2"]
+    )
+    assert conditions == {
+        ("Reporter", "SCFM2"), ("Reporter", "SCFM2 (i)"),
+        ("Reporter", "SCFM2 (M)"),
+    }
     plt.close(figure)
 
 

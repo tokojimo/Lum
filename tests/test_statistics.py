@@ -261,4 +261,5 @@ def test_directional_diagnostics_expose_exact_runtime_identifiers():
         repr("P0-lux\0BM2"), repr("PspeD2-1A-lux\0BM2")
     }
     assert diagnostic["unique_values"]["Groupe"] == ["Experiment 2 | BM2"]
-    assert len(diagnostic["biological_rows"]) == 6
+    assert len(diagnostic["biological_rows"]) == 9
+    assert diagnostic["complete_pairs"] == 3

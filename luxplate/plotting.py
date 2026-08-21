@@ -119,21 +119,12 @@ def _medium_label(value: object) -> str:
 
 
 def _comparison_identifiers(reporters: pd.Series, media: pd.Series) -> pd.Series:
-    """Join condition components while retaining a real NUL delimiter.
-
-    Keeping this construction in one place prevents display-oriented cleanup
-    from silently turning two distinct components into one ambiguous string.
-    The explicit representation check also makes a lost delimiter fail at the
-    point where it is introduced, rather than later as an unmatched test.
-    """
-    # pandas' vectorized ``str.cat(..., sep="\0")`` silently drops the NUL
-    # separator, so build the scalar Python strings explicitly.
+    """Represent a scientific condition as two independent components."""
     identifiers = pd.Series(
-        [f"{reporter}\0{medium}" for reporter, medium in zip(reporters, media)],
+        [(str(reporter), str(medium)) for reporter, medium in zip(reporters, media)],
         index=reporters.index,
         dtype=object,
     )
-    assert all("\\x00" in repr(value) for value in identifiers)
     return identifiers
 
 
@@ -579,11 +570,11 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
                        significant_only: bool = False,
                        show_technical_replicates: bool = True) -> pd.DataFrame:
     """Draw one metric panel and return its pairwise statistics."""
-    conditions = list(dict.fromkeys(biological[condition].astype(str)))
+    conditions = list(dict.fromkeys(biological[condition]))
     if condition == "_comparison":
         reporter_colors = _strain_colors(pd.DataFrame({"souche": biological["_reporter"]}))
         colors = {item: reporter_colors[biological.loc[
-            biological[condition].astype(str).eq(item), "_reporter"
+            biological[condition].map(lambda candidate: candidate == item), "_reporter"
         ].iloc[0]] for item in conditions}
     else:
         colors = _strain_colors(biological) if condition == "souche" else {
@@ -592,8 +583,8 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
         }
     rng = np.random.default_rng(seed)
     for condition_index, item in enumerate(conditions):
-        raw = technical.loc[technical[condition].astype(str).eq(item), metric].to_numpy(float)
-        values = biological.loc[biological[condition].astype(str).eq(item), metric].to_numpy(float)
+        raw = technical.loc[technical[condition].map(lambda candidate: candidate == item), metric].to_numpy(float)
+        values = biological.loc[biological[condition].map(lambda candidate: candidate == item), metric].to_numpy(float)
         # Fold changes retain the technical ratios specifically so their boxes
         # show the observed dispersion.  Biological means remain the only
         # values used for the large points and inferential statistics below.
@@ -613,15 +604,12 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
             axis.plot(condition_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
                       marker="o", markersize=2.8, color=color, alpha=.32, zorder=2)
 
-    identity_columns = [column for column in ("experience_id", "experience")
-                        if column in biological and biological[column].notna().any()]
+    identity_columns = next(([column] for column in ("experience_id", "experience")
+                             if column in biological and biological[column].notna().any()), [])
     if not identity_columns and "biological_replicate_id" in biological \
             and biological["biological_replicate_id"].notna().any():
         identity_columns = ["biological_replicate_id"]
-    if not identity_columns and "replicat" in biological \
-            and biological["replicat"].notna().any():
-        identity_columns = ["replicat"]
-    identity_columns = identity_columns or (["Groupe"] if condition == "souche" else ["souche"])
+    identity_columns = identity_columns or (["Groupe"] if condition == "souche" else [])
     for identity in biological[identity_columns].drop_duplicates().itertuples(index=False, name=None):
         mask = np.ones(len(biological), dtype=bool)
         for column, value in zip(identity_columns, identity):
@@ -629,7 +617,7 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
             mask &= matches.to_numpy()
         subset = biological.loc[mask]
         for condition_index, item in enumerate(conditions):
-            values = subset.loc[subset[condition].astype(str).eq(item), metric].to_numpy(float)
+            values = subset.loc[subset[condition].map(lambda candidate: candidate == item), metric].to_numpy(float)
             if len(values):
                 axis.scatter(condition_index + rng.uniform(-.025, .025), values[0], s=48,
                     marker="o", color=colors[item], edgecolor="white", linewidth=.6, zorder=3)
@@ -645,7 +633,7 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
         if condition == "souche":
             display_conditions.append(_display_strain(item))
         elif condition == "_comparison":
-            row = biological.loc[biological[condition].astype(str).eq(item)].iloc[0]
+            row = biological.loc[biological[condition].map(lambda candidate: candidate == item)].iloc[0]
             medium = _wrapped_label(row["_medium"], width=18)
             display_conditions.append(f"{_display_strain(row['_reporter'])}\n{medium}")
         else:
@@ -753,13 +741,19 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
     # An imported workbook/run (``experience_id`` or legacy ``experience``) is
     # the independent biological unit.  ``replicat`` identifies technical wells
     # inside that run and is therefore averaged, not counted as biological N.
-    biological_ids = [column for column in ("experience_id", "experience")
-                      if column in technical and technical[column].notna().any()]
+    biological_ids = next(([column] for column in ("experience_id", "experience")
+                           if column in technical and technical[column].notna().any()), [])
     if not biological_ids and "biological_replicate_id" in technical \
             and technical["biological_replicate_id"].notna().any():
         biological_ids = ["biological_replicate_id"]
-    if not biological_ids and "replicat" in technical and technical["replicat"].notna().any():
-        biological_ids = ["replicat"]
+    if not biological_ids:
+        # Figures remain available for legacy/single-run tables, but all their
+        # technical wells collapse to one biological unit and therefore can
+        # never manufacture enough pairs for inference.
+        statistical_technical = statistical_technical.assign(_biological_unit="unique")
+        technical = technical.assign(_biological_unit="unique")
+        metrics = metrics.assign(_biological_unit="unique")
+        biological_ids = ["_biological_unit"]
     group_columns = ["souche", "Groupe", *biological_ids]
     statistical_biological = statistical_technical.groupby(
         group_columns, dropna=False, sort=False
@@ -800,11 +794,11 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
     else:
         condition = "Groupe" if group_by == "souche" else "souche"
     ncols = min(3, len(panels)); nrows = int(np.ceil(len(panels) / ncols))
-    condition_count = biological[condition].nunique()
+    condition_count = len(dict.fromkeys(biological[condition]))
     height_intervals = list(combinations(range(condition_count), 2))
     if directional_comparisons is not None:
         condition_positions = {
-            item: index for index, item in enumerate(dict.fromkeys(biological[condition].astype(str)))
+            item: index for index, item in enumerate(dict.fromkeys(biological[condition]))
         }
         height_intervals = [
             (condition_positions[left], condition_positions[right])
@@ -845,7 +839,7 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
             panel_diagnostic_biological, value=metric, condition=condition,
             identity=tuple(diagnostic_identity),
             comparisons=(all_pairwise_comparisons(
-                list(dict.fromkeys(panel_biological[condition].astype(str)))
+                list(dict.fromkeys(panel_biological[condition]))
             ) if directional_comparisons is None else directional_comparisons),
         )
         for diagnostic in diagnostics:

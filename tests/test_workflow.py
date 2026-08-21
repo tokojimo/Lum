@@ -145,6 +145,6 @@ def test_three_uploaded_bm2_experiments_reach_paired_statistics_end_to_end():
     )
     biological = figure._luxplate_statistical_diagnostics[0]["biological_rows"]
     assert biological["experience"].nunique() == 3
-    assert repr(biological.iloc[0]["_comparison"]).endswith("\\x00BM2'")
+    assert biological.iloc[0]["_comparison"][1] == "BM2"
     assert figure._luxplate_statistics["n_pairs"].tolist() == [3, 3, 3]
     plt.close(figure)
