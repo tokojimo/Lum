@@ -16,7 +16,9 @@ from luxplate.plotting import (build_guided_corrected_figures,
                                directional_condition_options)
 from luxplate.project import PROJECT_KEYS, export_project, import_project
 from luxplate.statistics import all_pairwise_comparisons
-from luxplate.varioskan import combine_kinetic_tables, inspect_workbook, parse_kinetic_workbook
+from luxplate.varioskan import (assign_biological_pair_ids, combine_kinetic_tables,
+                               inspect_workbook, parse_kinetic_workbook,
+                               suggest_biological_pair_id)
 from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
                                filter_experiment_data, run_complete_analysis)
 
@@ -581,13 +583,60 @@ with guided_tab:
             st.error(f"Import impossible : {error}")
         else:
             selection_identity = tuple(guided_identity)
-            if st.session_state.get("guided_selection_identity") != selection_identity:
+            if (st.session_state.get("guided_selection_identity") != selection_identity
+                    or "guided_pair_mapping" not in st.session_state):
                 # A newly uploaded workbook must not silently reuse draft or
                 # validated choices belonging to the preceding dataset.
                 for key in ("guided_media", "guided_strains", "guided_crosstalk"):
                     st.session_state.pop(key, None)
                 st.session_state.pop("guided_validated_selection", None)
+                st.session_state.pop("guided_validated_pair_mapping", None)
+                st.session_state["guided_pair_mapping"] = pd.DataFrame({
+                    "experience": list(dict.fromkeys(guided_data["experience"])),
+                    "biological_pair_id": [
+                        suggest_biological_pair_id(item)
+                        for item in dict.fromkeys(guided_data["experience"])
+                    ],
+                })
                 st.session_state["guided_selection_identity"] = selection_identity
+
+            st.subheader("Correspondance des réplicats biologiques")
+            st.caption(
+                "Lum propose une correspondance à partir des marqueurs rep1/rep2/rep3. "
+                "Vérifiez ou modifiez chaque valeur, puis validez-la explicitement. "
+                "L'ordre et le nombre des fichiers ne créent jamais de paires automatiquement."
+            )
+            pair_mapping = st.data_editor(
+                st.session_state["guided_pair_mapping"],
+                disabled=["experience"], hide_index=True, use_container_width=True,
+                column_config={
+                    "experience": "Fichier / expérience",
+                    "biological_pair_id": "Réplicat biologique",
+                }, key="guided_pair_mapping_editor",
+            )
+            if st.button("Valider les correspondances biologiques", type="primary"):
+                try:
+                    assign_biological_pair_ids(guided_data, pair_mapping)
+                except ValueError as error:
+                    st.error(str(error))
+                else:
+                    st.session_state["guided_pair_mapping"] = pair_mapping.copy()
+                    st.session_state["guided_validated_pair_mapping"] = {
+                        "identity": selection_identity,
+                        "mapping": pair_mapping.copy(),
+                    }
+
+            validated_pairs = st.session_state.get("guided_validated_pair_mapping")
+            if not validated_pairs or validated_pairs.get("identity") != selection_identity:
+                st.info("Vérifiez puis validez les correspondances biologiques pour continuer.")
+                st.stop()
+            try:
+                guided_data = assign_biological_pair_ids(
+                    guided_data, validated_pairs["mapping"]
+                )
+            except ValueError as error:
+                st.error(str(error))
+                st.stop()
 
             strain_options = sorted(
                 guided_data.loc[guided_data["type"].eq("souche"), "souche"].unique()
@@ -659,6 +708,7 @@ with guided_tab:
             else:
                 guided_signature = (
                     tuple(guided_identity), tuple(guided_media), tuple(guided_strains), guided_crosstalk,
+                    tuple(validated_pairs["mapping"].itertuples(index=False, name=None)),
                 )
                 if st.session_state.get("guided_signature") != guided_signature:
                     st.session_state.pop("guided_complete_result", None)

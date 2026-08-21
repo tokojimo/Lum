@@ -83,7 +83,7 @@ def _biological_identity(biological: pd.DataFrame,
 
 def directional_test_diagnostics(
     biological: pd.DataFrame, *, value: str, condition: str = "souche",
-    identity: tuple[str, ...] = ("experience_id", "experience", "biological_replicate_id"),
+    identity: tuple[str, ...] = ("biological_pair_id", "experience_id", "experience", "biological_replicate_id"),
     comparisons: tuple[tuple[str, str], ...] = (),
 ) -> list[dict[str, object]]:
     """Capture the exact inputs presented to the directional test.
@@ -103,7 +103,7 @@ def directional_test_diagnostics(
     }
     row_columns = [
         column for column in
-        ("experience", "experience_id", "souche", "Groupe", "_comparison",
+        ("biological_pair_id", "experience", "experience_id", "souche", "Groupe", "_comparison",
          "lum_norm_peak", "lum_norm_auc")
         if column in biological
     ]
@@ -118,6 +118,18 @@ def directional_test_diagnostics(
             pair_table = pd.concat([table[left], table[right]], axis=1)
             pair_table.columns = ["A", "B"]
             pair_table = pair_table.reset_index()
+            # Keep the source run visible even when a common cross-file pair
+            # identifier is the actual pivot key.
+            for label, selected_condition in (("A", left), ("B", right)):
+                for origin in ("experience", "experience_id"):
+                    if origin in biological and origin not in ids:
+                        selected = biological.loc[
+                            biological[condition].map(lambda candidate: candidate == selected_condition)
+                        ]
+                        origins = selected.groupby(ids, dropna=False)[origin].agg(
+                            lambda values: " | ".join(map(str, pd.unique(values.dropna())))
+                        ).rename(f"{origin}_{label}").reset_index()
+                        pair_table = pair_table.merge(origins, on=ids, how="left")
         else:
             pair_table = pd.DataFrame()
         complete = pair_table[["A", "B"]].notna().all(axis=1) if not pair_table.empty else pd.Series(dtype=bool)
@@ -197,7 +209,7 @@ def _significance(p_value: float) -> str:
 
 def paired_directional_t_tests(
     biological: pd.DataFrame, *, value: str, condition: str = "souche",
-    identity: tuple[str, ...] = ("experience_id", "experience", "biological_replicate_id"),
+    identity: tuple[str, ...] = ("biological_pair_id", "experience_id", "experience", "biological_replicate_id"),
     comparisons: tuple[tuple[str, str], ...] | None = None, transform: str = "log10",
     alternative: str = "two-sided", multiple_testing_method: str = "Holm",
 ) -> pd.DataFrame:

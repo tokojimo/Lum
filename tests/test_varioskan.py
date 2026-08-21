@@ -1,15 +1,39 @@
 from io import BytesIO
 
 import numpy as np
+import pandas as pd
 import pytest
 from openpyxl import Workbook, load_workbook
 
 from luxplate.varioskan import (
+    assign_biological_pair_ids,
     combine_kinetic_tables,
     inspect_workbook,
     normalize_strain_name,
     parse_kinetic_workbook,
+    suggest_biological_pair_id,
 )
+
+
+def test_biological_pair_suggestions_use_names_not_file_order():
+    names = (
+        "260616_SCFM2_screening_rep1", "260616_SCFM2_screening_rep2",
+        "260618_SCFM2_screening_rep3", "260616_SCFM2kpi-80DMEM",
+        "260616_SCFM2kpi-80DMEM_Rep2", "260616_SCFM2kpi-80DMEM_Rep3",
+    )
+    assert [suggest_biological_pair_id(name) for name in names] == [
+        "bio1", "bio2", "bio3", "bio1", "bio2", "bio3",
+    ]
+
+
+def test_validated_biological_pair_mapping_is_attached_to_every_file_row():
+    data = pd.DataFrame({"experience": ["run_rep1", "run_rep1", "other_Rep2"]})
+    mapping = pd.DataFrame({
+        "experience": ["run_rep1", "other_Rep2"],
+        "biological_pair_id": ["donor-a", "donor-b"],
+    })
+    result = assign_biological_pair_ids(data, mapping)
+    assert result["biological_pair_id"].tolist() == ["donor-a", "donor-a", "donor-b"]
 
 
 def synthetic_workbook(*, second_luminescence=False) -> BytesIO:

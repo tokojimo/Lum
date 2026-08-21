@@ -604,7 +604,7 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
             axis.plot(condition_index + rng.uniform(-.16, .16, len(raw)), raw, linestyle="none",
                       marker="o", markersize=2.8, color=color, alpha=.32, zorder=2)
 
-    identity_columns = next(([column] for column in ("experience_id", "experience")
+    identity_columns = next(([column] for column in ("biological_pair_id", "experience_id", "experience")
                              if column in biological and biological[column].notna().any()), [])
     if not identity_columns and "biological_replicate_id" in biological \
             and biological["biological_replicate_id"].notna().any():
@@ -741,7 +741,7 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
     # An imported workbook/run (``experience_id`` or legacy ``experience``) is
     # the independent biological unit.  ``replicat`` identifies technical wells
     # inside that run and is therefore averaged, not counted as biological N.
-    biological_ids = next(([column] for column in ("experience_id", "experience")
+    biological_ids = next(([column] for column in ("biological_pair_id", "experience_id", "experience")
                            if column in technical and technical[column].notna().any()), [])
     if not biological_ids and "biological_replicate_id" in technical \
             and technical["biological_replicate_id"].notna().any():
@@ -755,15 +755,29 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
         metrics = metrics.assign(_biological_unit="unique")
         biological_ids = ["_biological_unit"]
     group_columns = ["souche", "Groupe", *biological_ids]
-    statistical_biological = statistical_technical.groupby(
-        group_columns, dropna=False, sort=False
-    )[metric].mean().reset_index()
-    biological = technical.groupby(group_columns, dropna=False, sort=False)[metric].mean().reset_index()
+    def biological_means(frame):
+        aggregations = {metric: "mean"}
+        # Preserve the imported run for pairing diagnostics without making it
+        # part of the cross-file grouping key.
+        for origin in ("experience", "experience_id"):
+            if origin in frame and origin not in group_columns:
+                aggregations[origin] = "first"
+        return frame.groupby(group_columns, dropna=False, sort=False).agg(aggregations).reset_index()
+
+    statistical_biological = biological_means(statistical_technical)
+    biological = biological_means(technical)
     diagnostic_metrics = [column for column in ("lum_norm_peak", "lum_norm_auc")
                           if column in metrics]
-    diagnostic_biological = metrics.groupby(
-        group_columns, dropna=False, sort=False
-    )[diagnostic_metrics].mean().reset_index() if diagnostic_metrics else biological.copy()
+    if diagnostic_metrics:
+        diagnostic_aggregations = {column: "mean" for column in diagnostic_metrics}
+        for origin in ("experience", "experience_id"):
+            if origin in metrics and origin not in group_columns:
+                diagnostic_aggregations[origin] = "first"
+        diagnostic_biological = metrics.groupby(
+            group_columns, dropna=False, sort=False
+        ).agg(diagnostic_aggregations).reset_index()
+    else:
+        diagnostic_biological = biological.copy()
     panels = ([None] if group_by is None else
               list(dict.fromkeys(biological[group_by].dropna().astype(str))))
     if not panels:
