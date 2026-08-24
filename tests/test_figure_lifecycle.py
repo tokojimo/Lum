@@ -4,11 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from luxplate.figure_lifecycle import (
-    PUBLICATION_FIGURES_KEY,
-    PUBLICATION_SIGNATURE_KEY,
     invalidate_guided_analysis_state,
-    publication_figure_signature,
-    rebuild_publication_figures,
     validate_figure_render,
 )
 from luxplate.plotting import build_publication_figures, directional_condition_options
@@ -83,6 +79,17 @@ def test_selection_change_discards_all_old_directional_widget_state():
     }
 
 
+def test_legacy_gallery_is_removed_from_state_without_clearing_its_figure():
+    figure = auc_figure(publication_table())
+    state = {"guided_publication_figures": [("auc", figure)]}
+
+    invalidate_guided_analysis_state(state)
+
+    assert state == {}
+    assert_visible_auc(figure)
+    plt.close(figure)
+
+
 def test_removed_medium_can_be_followed_by_rebuilt_nonempty_auc_figures():
     media_a = ["SCFM2", "SCFM2 (i)", "SCFM2 (M)", "SCFM2 (Aa)", "SCFM2 (c)", "SCFM2-KPi"]
     media_b = [medium for medium in media_a if medium != "SCFM2 (Aa)"]
@@ -141,7 +148,7 @@ def test_auc_remains_visible_when_comparisons_are_not_calculable():
     plt.close(figure)
 
 
-def test_hypothesis_reruns_replace_figures_statistics_and_brackets():
+def test_hypothesis_reruns_build_fresh_figures_statistics_and_brackets():
     data = pd.concat(
         [publication_table().assign(experience_id=f"exp-{index}") for index in range(3)],
         ignore_index=True,
@@ -158,32 +165,21 @@ def test_hypothesis_reruns_replace_figures_statistics_and_brackets():
         tuple((conditions[1], item) for item in conditions[5:8]),
         (),
     )
-    state = {}
     former = None
 
     for comparisons in stacks:
-        signature = publication_figure_signature(
+        figure = auc_figure(
+            data,
             directional_comparisons=comparisons,
             statistical_transform="log10",
             alternative="greater",
         )
-        figure = rebuild_publication_figures(
-            state,
-            signature,
-            lambda comparisons=comparisons: [(
-                "auc_luminescence_normalisee",
-                auc_figure(
-                    data,
-                    directional_comparisons=comparisons,
-                    statistical_transform="log10",
-                    alternative="greater",
-                ),
-            )],
-        )[0][1]
 
         if former is not None:
             assert former is not figure
-            assert not former.axes
+            # Building the next render must not mutate a Figure that the
+            # Streamlit frontend from the preceding run may still reference.
+            assert_visible_auc(former)
         statistics = figure._luxplate_statistics
         expected = [tuple(tuple(item.split("\0", 1)) for item in pair) for pair in comparisons]
         assert list(zip(statistics["condition_1"], statistics["condition_2"])) == expected
@@ -193,31 +189,6 @@ def test_hypothesis_reruns_replace_figures_statistics_and_brackets():
             if len(line.get_xdata()) == 4 and len(line.get_ydata()) == 4
         ]
         assert len(bracket_lines) == len(comparisons)
-        assert state[PUBLICATION_FIGURES_KEY][0][1] is figure
-        assert state[PUBLICATION_SIGNATURE_KEY] == signature
         former = figure
 
     plt.close(former)
-
-
-def test_figure_signature_tracks_statistical_content_and_hypothesis_order():
-    comparisons = (("reporter\0medium-a", "reporter\0medium-b"),
-                   ("reporter\0medium-a", "reporter\0medium-c"))
-    baseline = publication_figure_signature(
-        directional_comparisons=comparisons,
-        statistical_transform="log10",
-        alternative="greater",
-    )
-
-    assert baseline != publication_figure_signature(
-        directional_comparisons=tuple(reversed(comparisons)),
-        statistical_transform="log10", alternative="greater",
-    )
-    assert baseline != publication_figure_signature(
-        directional_comparisons=comparisons,
-        statistical_transform="none", alternative="greater",
-    )
-    assert baseline != publication_figure_signature(
-        directional_comparisons=comparisons,
-        statistical_transform="log10", alternative="two-sided",
-    )

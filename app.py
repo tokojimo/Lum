@@ -13,8 +13,6 @@ from luxplate.crosstalk import correct_plate_crosstalk
 from luxplate.export import package_figures
 from luxplate.display_order import reconcile_display_order
 from luxplate.figure_lifecycle import (invalidate_guided_analysis_state,
-                                       publication_figure_signature,
-                                       rebuild_publication_figures,
                                        validate_figure_render)
 from luxplate.plotting import (build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
@@ -91,7 +89,7 @@ def cached_guided_crosstalk_figures(data: pd.DataFrame, sample_type: str):
     return build_guided_crosstalk_figures(data, sample_type=sample_type)
 
 
-def cached_publication_figures(
+def build_current_publication_figures(
     data: pd.DataFrame,
     title: str,
     families: tuple[str, ...],
@@ -435,13 +433,11 @@ def render_guided_results(complete, base: str) -> None:
                 medium_order=guided_medium_order,
                 reporter_order=guided_reporter_order,
             )
-            figure_signature = publication_figure_signature(**figure_parameters)
-            guided_figures = rebuild_publication_figures(
-                st.session_state,
-                figure_signature,
-                lambda: cached_publication_figures(
-                    complete.normalization.normalized_data, **figure_parameters
-                ),
+            # Figures are render-local mutable resources.  In particular, do
+            # not put them in session state: a fragment from the previous run
+            # may still reference its canvas while this app rerun is rendered.
+            guided_figures = build_current_publication_figures(
+                complete.normalization.normalized_data, **figure_parameters
             )
             assert guided_figures, "La construction n'a produit aucune figure."
             statistical_results = collect_publication_statistics(guided_figures)
