@@ -28,6 +28,25 @@ def test_display_order_reconciles_new_and_missing_values():
     assert reconcile_display_order(["M2", "M1", "M3"], ["M3", "M1"]) == ["M1", "M3"]
 
 
+@pytest.mark.parametrize(
+    ("polluted_session_state", "present", "expected"),
+    [
+        ([{"items": ["M2", "M1"]}, "M2", 42, None],
+         ["M1", "M2", "M3"], ["M2", "M1", "M3"]),
+        ([{"header": "reporters"}, ["R2", "R1"]],
+         ["R1", "R2"], ["R1", "R2"]),
+    ],
+)
+def test_display_order_recovers_from_sortable_internal_session_state(
+    polluted_session_state, present, expected
+):
+    """A stale streamlit-sortables payload must fall back to a valid order."""
+    reconciled = reconcile_display_order(polluted_session_state, present)
+
+    assert reconciled == expected
+    assert all(isinstance(value, str) for value in reconciled)
+
+
 def test_custom_medium_and_reporter_order_controls_curve_panels_and_lines():
     data = pd.concat([
         _publication_table().assign(Groupe=medium, souche=reporter)
