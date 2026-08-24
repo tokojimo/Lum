@@ -940,7 +940,13 @@ with guided_tab:
                 except ValueError as error:
                     st.error(f"Correction du cross-talk impossible : {error}")
                     st.stop()
-                st.caption("Cross-talk corrigé avec MAURI_E06_BEST.")
+                if per_time_mode:
+                    st.caption(
+                        "Cross-talk corrigé avec MAURI_E06_BEST, indépendamment pour "
+                        "chaque fichier Excel (une plaque physique par fichier)."
+                    )
+                else:
+                    st.caption("Cross-talk corrigé avec MAURI_E06_BEST.")
             st.success(
                 f"Sélection validée : {len(guided_media)} milieu(x) et "
                 f"{len(guided_strains)} souche(s)."

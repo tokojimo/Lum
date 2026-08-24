@@ -212,6 +212,9 @@ def test_one_file_per_time_concatenates_and_maps_real_hours():
     assert result["time_index"].drop_duplicates().tolist() == [0, 1, 2]
     assert result.groupby("time_index")["temps_h"].first().to_dict() == {0: 0, 1: .5, 2: 3}
     assert result.groupby("time_index")["lecture"].first().to_dict() == {0: 1, 1: 2, 2: 3}
+    assert result.groupby("time_index")["source_workbook"].first().to_dict() == {
+        0: "experiment_t0.xlsx", 1: "experiment_t1.xlsx", 2: "experiment_t2.xlsx",
+    }
     assert result.groupby("time_index")["temps_sec_do"].first().to_dict() == {
         0: 0, 1: 1800, 2: 10800,
     }

@@ -450,6 +450,10 @@ def combine_kinetic_tables(
         experience = clean_text(Path(name).stem) or f"experience_{position}"
         namespace = f"exp{position}"
         frame["experience"] = experience
+        # Keep an explicit physical-plate boundary.  ``experience`` is a
+        # biological grouping and may legitimately be shared or edited later;
+        # the workbook itself remains the unit acquired on the reader.
+        frame["source_workbook"] = name
         frame["Groupe"] = namespace + "|" + frame["Groupe"].fillna("").astype(str)
         frame["sample_header"] = namespace + "|" + frame["sample_header"].fillna("").astype(str)
         combined.append(frame)
@@ -591,6 +595,10 @@ def combine_time_point_tables(
             normalized["ecart_temps_s"] = 0
             normalized["lecture"] = index + 1
             normalized["experience"] = experiment
+            # In endpoint mode every workbook is a distinct physical plate,
+            # even when several files belong to one time-course experiment or
+            # are mapped to the same real time.
+            normalized["source_workbook"] = name
             namespace = f"exp{position}|"
             logical_group = normalized["Groupe"].fillna("").astype(str)
             normalized["Groupe"] = namespace + normalized["Groupe"].fillna("").astype(str)

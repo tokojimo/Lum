@@ -74,6 +74,39 @@ def test_times_and_experiments_are_solved_independently():
         np.testing.assert_allclose(corrected_in_plate_order(group), truth, atol=2e-12)
 
 
+def test_source_workbooks_are_solved_as_independent_plates_at_same_time():
+    first_truth = np.arange(48, dtype=float) + 10
+    second_truth = np.arange(48, dtype=float) + 100
+    model = load_crosstalk_model()
+
+    def half_plate(workbook, wells, truth):
+        indices = [PLATE_WELLS.index(well) for well in wells]
+        raw = model.Dbest[np.ix_(indices, indices)] @ truth + model.background_rlu
+        return pd.DataFrame({
+            "experience": "shared-run",
+            "source_workbook": workbook,
+            "temps_h": 1.0,
+            "puits": wells,
+            "Lum_brute": raw,
+        })
+
+    # Both workbooks use the same physical wells and real time.  Combining
+    # them before deconvolution would either duplicate wells or manufacture a
+    # synthetic plate; the workbook boundary must therefore win.
+    wells = PLATE_WELLS[:48]
+    data = pd.concat([
+        half_plate("run_t1.xlsx", wells, first_truth),
+        half_plate("run_t2.xlsx", wells, second_truth),
+    ], ignore_index=True)
+
+    result = correct_plate_crosstalk(data)
+
+    for workbook, truth in (("run_t1.xlsx", first_truth), ("run_t2.xlsx", second_truth)):
+        corrected = (result.query("source_workbook == @workbook")
+                     .set_index("puits").loc[list(wells), "RLU_corrected"])
+        np.testing.assert_allclose(corrected, truth, rtol=2e-12, atol=2e-10)
+
+
 def test_input_is_not_mutated():
     data = plate(np.ones(96))
     original = data.copy(deep=True)

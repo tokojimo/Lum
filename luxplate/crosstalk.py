@@ -99,9 +99,13 @@ def correct_plate_crosstalk(
     vocabulary. A missing raw reading on a row that is present is never
     manufactured.
 
-    Each experiment/time group is solved independently using the principal
-    submatrix in canonical A01–H12 order. The input is never mutated and the
-    deconvolved source signal is constrained to non-negative values.
+    Each source workbook/time group is solved independently using the
+    principal submatrix in canonical A01–H12 order.  This is especially
+    important for endpoint imports, where several workbooks form a time course
+    but every workbook is a separate physical plate.  For legacy tables that
+    do not expose ``source_workbook``, ``experience`` remains the plate key.
+    The input is never mutated and the deconvolved source signal is constrained
+    to non-negative values.
     """
     required = {"puits", "temps_h", "Lum_brute"}
     missing = sorted(required.difference(data.columns))
@@ -145,7 +149,13 @@ def correct_plate_crosstalk(
     output["crosstalk_kernel_id"] = model.metadata["kernel_id"]
     output["crosstalk_condition_number"] = model.condition_number
 
-    group_keys = (["experience"] if "experience" in output.columns else []) + ["temps_h"]
+    if "source_workbook" in output.columns:
+        plate_keys = ["source_workbook"]
+    elif "experience" in output.columns:
+        plate_keys = ["experience"]
+    else:
+        plate_keys = []
+    group_keys = plate_keys + ["temps_h"]
     grouper = group_keys[0] if len(group_keys) == 1 else group_keys
     for key, plate in output.groupby(grouper, sort=False, dropna=False):
         duplicates = sorted(plate.loc[plate["puits"].duplicated(keep=False), "puits"].unique())
