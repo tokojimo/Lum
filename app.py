@@ -6,10 +6,12 @@ from io import BytesIO
 
 import pandas as pd
 import streamlit as st
+from streamlit_sortables import sort_items
 
 from luxplate.blanks import run_blank_correction
 from luxplate.crosstalk import correct_plate_crosstalk
 from luxplate.export import package_figures
+from luxplate.display_order import reconcile_display_order
 from luxplate.figure_lifecycle import (invalidate_guided_analysis_state,
                                        validate_figure_render)
 from luxplate.plotting import (build_guided_corrected_figures,
@@ -100,6 +102,8 @@ def cached_publication_figures(
     alternative: str,
     width_scale: float,
     height_scale: float,
+    medium_order: tuple[str, ...],
+    reporter_order: tuple[str, ...],
 ):
     """Create fresh publication figures for the current Streamlit render.
 
@@ -115,7 +119,37 @@ def cached_publication_figures(
         show_technical_replicates=show_technical_replicates,
         statistical_transform=statistical_transform, alternative=alternative,
         width_scale=width_scale, height_scale=height_scale,
+        medium_order=medium_order, reporter_order=reporter_order,
     )
+
+
+@st.fragment
+def select_display_order(media: list[str], reporters: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Edit drag-and-drop drafts and expose only explicitly validated orders."""
+    specifications = (("media", "Ordre des milieux", media),
+                      ("reporters", "Ordre des souches / reporters", reporters))
+    drafts: dict[str, list[str]] = {}
+    for name, label, present in specifications:
+        validated_key = f"guided_display_order_{name}"
+        draft_key = f"guided_display_order_{name}_draft"
+        validated = reconcile_display_order(st.session_state.get(validated_key, []), present)
+        st.session_state[validated_key] = validated
+        draft_seed = reconcile_display_order(st.session_state.get(draft_key, validated), present)
+        st.markdown(f"**{label}**")
+        drafts[name] = sort_items(draft_seed, direction="vertical", key=draft_key)
+
+    controls = st.columns(2)
+    if controls[0].button("Valider l'ordre d'affichage", type="primary"):
+        for name, _, _ in specifications:
+            st.session_state[f"guided_display_order_{name}"] = drafts[name]
+        st.rerun()
+    if controls[1].button("Réinitialiser l'ordre"):
+        for name, _, present in specifications:
+            st.session_state[f"guided_display_order_{name}"] = list(present)
+            st.session_state[f"guided_display_order_{name}_draft"] = list(present)
+        st.rerun()
+    return (tuple(st.session_state["guided_display_order_media"]),
+            tuple(st.session_state["guided_display_order_reporters"]))
 
 
 @st.fragment
@@ -317,6 +351,16 @@ def render_guided_results(complete, base: str) -> None:
             help=("Ajoute un petit point par puits technique dans les figures de synthèse, "
                   "quel que soit le nombre de réplicats."),
         )
+        st.markdown("##### Ordre d'affichage")
+        available_conditions = directional_condition_options(
+            complete.normalization.normalized_data
+        ).values()
+        available_pairs = [condition.split("\0", 1) for condition in available_conditions]
+        natural_reporters = list(dict.fromkeys(pair[0] for pair in available_pairs))
+        natural_media = list(dict.fromkeys(pair[1] for pair in available_pairs))
+        guided_medium_order, guided_reporter_order = select_display_order(
+            natural_media, natural_reporters
+        )
         st.markdown("#### Dimensions des figures")
         st.caption(
             "Ajustez séparément la longueur des axes X et Y. Ces dimensions sont aussi "
@@ -377,6 +421,8 @@ def render_guided_results(complete, base: str) -> None:
                 statistical_transform=guided_transform, alternative=guided_alternative,
                 width_scale=guided_width_percent / 100,
                 height_scale=guided_height_percent / 100,
+                medium_order=guided_medium_order,
+                reporter_order=guided_reporter_order,
             )
             assert guided_figures, "La construction n'a produit aucune figure."
             statistical_results = collect_publication_statistics(guided_figures)
