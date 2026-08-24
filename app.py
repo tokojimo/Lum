@@ -13,6 +13,8 @@ from luxplate.crosstalk import correct_plate_crosstalk
 from luxplate.export import package_figures
 from luxplate.display_order import reconcile_display_order
 from luxplate.figure_lifecycle import (invalidate_guided_analysis_state,
+                                       publication_figure_signature,
+                                       rebuild_publication_figures,
                                        validate_figure_render)
 from luxplate.plotting import (build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
@@ -278,7 +280,7 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
     pending_changes = stack != validated
     if st.button(
         "Valider les hypothèses et lancer les tests",
-        key=f"{key}_validate", type="primary", disabled=not stack,
+        key=f"{key}_validate", type="primary", disabled=not pending_changes,
         help="Les figures et les tests ne sont recalculés qu'après cette validation.",
     ):
         st.session_state[validated_key] = list(stack)
@@ -419,8 +421,7 @@ def render_guided_results(complete, base: str) -> None:
         if not guided_figure_labels:
             st.info("Sélectionnez au moins une figure finale.")
         else:
-            guided_figures = cached_publication_figures(
-                complete.normalization.normalized_data,
+            figure_parameters = dict(
                 title="Analyse complète",
                 families=tuple(guided_family_labels[label] for label in guided_figure_labels),
                 panel_by="Groupe" if guided_panel_label.endswith("milieu") else "souche",
@@ -433,6 +434,14 @@ def render_guided_results(complete, base: str) -> None:
                 height_scale=guided_height_percent / 100,
                 medium_order=guided_medium_order,
                 reporter_order=guided_reporter_order,
+            )
+            figure_signature = publication_figure_signature(**figure_parameters)
+            guided_figures = rebuild_publication_figures(
+                st.session_state,
+                figure_signature,
+                lambda: cached_publication_figures(
+                    complete.normalization.normalized_data, **figure_parameters
+                ),
             )
             assert guided_figures, "La construction n'a produit aucune figure."
             statistical_results = collect_publication_statistics(guided_figures)

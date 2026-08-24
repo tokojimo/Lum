@@ -3,7 +3,14 @@ from io import BytesIO
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from luxplate.figure_lifecycle import invalidate_guided_analysis_state, validate_figure_render
+from luxplate.figure_lifecycle import (
+    PUBLICATION_FIGURES_KEY,
+    PUBLICATION_SIGNATURE_KEY,
+    invalidate_guided_analysis_state,
+    publication_figure_signature,
+    rebuild_publication_figures,
+    validate_figure_render,
+)
 from luxplate.plotting import build_publication_figures, directional_condition_options
 
 
@@ -57,6 +64,9 @@ def test_selection_change_discards_all_old_directional_widget_state():
         "guided_directional_comparisons_medium_a": "SCFM2 (Aa)",
         "guided_directional_comparisons_medium_b": "SCFM2",
         "guided_directional_comparisons_control": "P0",
+        "guided_publication_figure_signature": (("alternative", "greater"),),
+        "guided_publication_statistics": pd.DataFrame({"old": [True]}),
+        "guided_publication_diagnostics": [{"old": True}],
         "guided_figure_lum_scale": "Logarithmique (base 10)",
         "guided_figure_width_percent": 120,
     }
@@ -129,3 +139,85 @@ def test_auc_remains_visible_when_comparisons_are_not_calculable():
     assert figure._luxplate_statistics["p_raw"].isna().all()
     assert figure._luxplate_statistics["calculation_status"].eq("non calculable").all()
     plt.close(figure)
+
+
+def test_hypothesis_reruns_replace_figures_statistics_and_brackets():
+    data = pd.concat(
+        [publication_table().assign(experience_id=f"exp-{index}") for index in range(3)],
+        ignore_index=True,
+    )
+    data = pd.concat(
+        [data.assign(Groupe=medium) for medium in ("SCFM2", "SCFM2-KPi", "SCFM2 (i)",
+                                                   "SCFM2 (M)", "SCFM2 (c)")],
+        ignore_index=True,
+    )
+    conditions = tuple(directional_condition_options(data).values())
+    stacks = (
+        tuple((conditions[0], item) for item in conditions[1:9]),
+        tuple((conditions[0], item) for item in conditions[1:5]),
+        tuple((conditions[1], item) for item in conditions[5:8]),
+        (),
+    )
+    state = {}
+    former = None
+
+    for comparisons in stacks:
+        signature = publication_figure_signature(
+            directional_comparisons=comparisons,
+            statistical_transform="log10",
+            alternative="greater",
+        )
+        figure = rebuild_publication_figures(
+            state,
+            signature,
+            lambda comparisons=comparisons: [(
+                "auc_luminescence_normalisee",
+                auc_figure(
+                    data,
+                    directional_comparisons=comparisons,
+                    statistical_transform="log10",
+                    alternative="greater",
+                ),
+            )],
+        )[0][1]
+
+        if former is not None:
+            assert former is not figure
+            assert not former.axes
+        statistics = figure._luxplate_statistics
+        expected = [tuple(tuple(item.split("\0", 1)) for item in pair) for pair in comparisons]
+        assert list(zip(statistics["condition_1"], statistics["condition_2"])) == expected
+        assert len(figure._luxplate_statistical_diagnostics) == len(comparisons)
+        bracket_lines = [
+            line for axis in figure.axes for line in axis.lines
+            if len(line.get_xdata()) == 4 and len(line.get_ydata()) == 4
+        ]
+        assert len(bracket_lines) == len(comparisons)
+        assert state[PUBLICATION_FIGURES_KEY][0][1] is figure
+        assert state[PUBLICATION_SIGNATURE_KEY] == signature
+        former = figure
+
+    plt.close(former)
+
+
+def test_figure_signature_tracks_statistical_content_and_hypothesis_order():
+    comparisons = (("reporter\0medium-a", "reporter\0medium-b"),
+                   ("reporter\0medium-a", "reporter\0medium-c"))
+    baseline = publication_figure_signature(
+        directional_comparisons=comparisons,
+        statistical_transform="log10",
+        alternative="greater",
+    )
+
+    assert baseline != publication_figure_signature(
+        directional_comparisons=tuple(reversed(comparisons)),
+        statistical_transform="log10", alternative="greater",
+    )
+    assert baseline != publication_figure_signature(
+        directional_comparisons=comparisons,
+        statistical_transform="none", alternative="greater",
+    )
+    assert baseline != publication_figure_signature(
+        directional_comparisons=comparisons,
+        statistical_transform="log10", alternative="two-sided",
+    )
