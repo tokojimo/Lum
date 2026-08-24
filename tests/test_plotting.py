@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from matplotlib.ticker import FuncFormatter
 
+from luxplate.display_order import reconcile_display_order
 from luxplate.plotting import (_aligned_biological_summary, _comparison_identifiers,
                                BRACKET_ENDPOINT_GAP, DEFAULT_BOXPLOT_Y_SCALE,
                                DEFAULT_CURVE_Y_SCALE, _bracket_draw_coordinates, _bracket_levels,
@@ -20,6 +21,53 @@ from luxplate.plotting import (_aligned_biological_summary, _comparison_identifi
                                plot_publication_panels)
 from luxplate.statistics import _canonical_condition, paired_directional_t_tests
 from test_workflow import workflow_table
+
+
+def test_display_order_reconciles_new_and_missing_values():
+    assert reconcile_display_order(["M2", "M1"], ["M1", "M2", "M3"]) == ["M2", "M1", "M3"]
+    assert reconcile_display_order(["M2", "M1", "M3"], ["M3", "M1"]) == ["M1", "M3"]
+
+
+def test_custom_medium_and_reporter_order_controls_curve_panels_and_lines():
+    data = pd.concat([
+        _publication_table().assign(Groupe=medium, souche=reporter)
+        for medium in ("M1", "M2") for reporter in ("R1", "R2")
+    ], ignore_index=True)
+    by_medium = plot_publication_panels(
+        data, value="DO_corr", medium_order=("M2", "M1"), reporter_order=("R2", "R1")
+    )
+    assert [axis.get_title() for axis in by_medium.axes] == ["M2", "M1"]
+    assert [container.get_label() for container in by_medium.axes[0].containers
+            if container.get_label() != "_nolegend_"] == ["R2", "R1"]
+    by_reporter = plot_publication_panels(
+        data, value="DO_corr", group_by="souche", reporter_order=("R2", "R1")
+    )
+    assert [axis.get_title() for axis in by_reporter.axes] == ["R2", "R1"]
+
+
+def test_combined_metric_order_moves_boxes_and_brackets_without_changing_statistics():
+    rows = [
+        {"souche": reporter, "Groupe": medium, "experience_id": f"e{bio}",
+         "replicat": 1, "lum_norm_auc": base + bio}
+        for reporter, reporter_base in (("R1", 10), ("R2", 20))
+        for medium, base in (("M1", reporter_base), ("M2", reporter_base + 2))
+        for bio in range(1, 5)
+    ]
+    data = pd.DataFrame(rows)
+    comparison = (("R1\0M1", "R2\0M2"),)
+    natural = plot_metric_points(data, metric="lum_norm_auc", compare_media=True,
+                                 directional_comparisons=comparison)
+    reordered = plot_metric_points(
+        data, metric="lum_norm_auc", compare_media=True,
+        directional_comparisons=comparison,
+        reporter_order=("R2", "R1"), medium_order=("M2", "M1")
+    )
+    assert [label.get_text().replace("\n", " · ") for label in reordered.axes[0].get_xticklabels()] == [
+        "R2 · M2", "R2 · M1", "R1 · M2", "R1 · M1"
+    ]
+    pd.testing.assert_frame_equal(natural._luxplate_statistics, reordered._luxplate_statistics)
+    bracket = [line for line in reordered.axes[0].lines if len(line.get_xdata()) == 4][-1]
+    assert list(bracket.get_xdata()) == [0, 0, 3, 3]
 
 
 def test_directional_condition_options_exposes_each_box_once():

@@ -15,6 +15,8 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter
 from matplotlib.transforms import blended_transform_factory
 
+from luxplate.display_order import ordered_present
+
 from luxplate.kinetics import run_kinetics
 from luxplate.statistics import (all_pairwise_comparisons, directional_test_diagnostics,
                                  paired_directional_t_tests)
@@ -116,6 +118,16 @@ def _medium_label(value: object) -> str:
         flags=re.IGNORECASE,
     )
     return match.group(1).strip() if match else label
+
+
+def _ordered_plot_values(values, preferred: tuple[str, ...], *, media: bool = False) -> list[str]:
+    """Order plot values, matching experiment-qualified groups by pooled medium."""
+    natural = ordered_present(values, ())
+    rank = {value: index for index, value in enumerate(preferred)}
+    natural_rank = {value: index for index, value in enumerate(natural)}
+    return sorted(natural, key=lambda value: (
+        rank.get(_medium_label(value) if media else value, len(rank)), natural_rank[value]
+    ))
 
 
 def _comparison_identifiers(reporters: pd.Series, media: pd.Series) -> pd.Series:
@@ -364,7 +376,9 @@ def _aligned_biological_summary(data: pd.DataFrame, value: str,
 
 
 def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "Groupe",
-                            title: str | None = None, y_scale: str = DEFAULT_CURVE_Y_SCALE):
+                            title: str | None = None, y_scale: str = DEFAULT_CURVE_Y_SCALE,
+                            medium_order: tuple[str, ...] = (),
+                            reporter_order: tuple[str, ...] = ()):
     """Make one publication-style mean ± SD time-course panel per group."""
     required = {"temps_h", "souche", "sample_header", value, group_by}
     missing = required.difference(data.columns)
@@ -377,7 +391,9 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
         work = work.loc[pd.to_numeric(work[value], errors="coerce").gt(0)]
     if "type" in work:
         work = work.loc[work["type"].eq("souche")]
-    panels = list(dict.fromkeys(work[group_by].dropna().astype(str)))
+    panel_order = reporter_order if group_by == "souche" else medium_order
+    panels = _ordered_plot_values(work[group_by].dropna(), panel_order,
+                                  media=group_by in {"Groupe", "Milieu"})
     if not panels:
         raise ValueError("No usable data available for the final figures.")
     strain_colors = _strain_colors(work)
@@ -394,7 +410,7 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
     for panel_index, panel in enumerate(panels):
         axis = axes.flat[panel_index]
         subset = work.loc[work[group_by].astype(str).eq(panel)]
-        strains = list(dict.fromkeys(subset["souche"].astype(str)))
+        strains = ordered_present(subset["souche"], reporter_order)
         for strain in strains:
             color = strain_colors[strain]
             strain_data = subset.loc[subset["souche"].astype(str).eq(strain)]
@@ -444,7 +460,8 @@ def _mean_sd(data: pd.DataFrame, value: str) -> pd.DataFrame:
 def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
                       uncertainty: str = "bars", title: str | None = None,
                       media: list[str] | None = None, strains: list[str] | None = None,
-                      lum_value: str = "Lum_corr"):
+                      lum_value: str = "Lum_corr", medium_order: tuple[str, ...] = (),
+                      reporter_order: tuple[str, ...] = (), panel_by: str = "Groupe"):
     """Plot aligned OD and luminescence on genuine dual-y-axis panels."""
     if lum_value not in {"Lum_corr", "Lum_norm"}:
         raise ValueError("lum_value must be 'Lum_corr' or 'Lum_norm'.")
@@ -459,11 +476,22 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
         work = work.loc[work["Groupe"].astype(str).isin(media)]
     if strains:
         work = work.loc[work["souche"].astype(str).isin(strains)]
-    panels = list(dict.fromkeys(work["Groupe"].dropna().astype(str)))
+    if panel_by not in {"Groupe", "souche"}:
+        raise ValueError("panel_by must be 'Groupe' or 'souche'.")
+    series_by = "souche" if panel_by == "Groupe" else "Groupe"
+    panel_order = medium_order if panel_by == "Groupe" else reporter_order
+    series_order = reporter_order if series_by == "souche" else medium_order
+    panels = _ordered_plot_values(work[panel_by].dropna(), panel_order,
+                                  media=panel_by == "Groupe")
     if not panels:
         raise ValueError("No condition selected for combined figure.")
-    strains_in_order = list(dict.fromkeys(work["souche"].dropna().astype(str)))
+    strains_in_order = _ordered_plot_values(work[series_by].dropna(), series_order,
+                                            media=series_by == "Groupe")
     strain_colors = _strain_colors(work)
+    series_colors = (strain_colors if series_by == "souche" else {
+        item: PUBLICATION_COLORS[index % len(PUBLICATION_COLORS)]
+        for index, item in enumerate(strains_in_order)
+    })
     ncols = min(3, len(panels)); blocks = int(np.ceil(len(panels) / ncols))
     panel_title_width = {1: 50, 2: 30, 3: 22}[ncols]
     header_columns, _ = _legend_layout(len(strains_in_order), extra_items=2)
@@ -478,9 +506,11 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
         bottom = top.twinx()
         od_axes.append(top)
         lum_axes.append(bottom)
-        subset = work.loc[work["Groupe"].astype(str).eq(medium)]
-        for strain, strain_data in subset.groupby("souche", sort=False):
-            color = strain_colors[str(strain)]
+        subset = work.loc[work[panel_by].astype(str).eq(medium)]
+        for strain in _ordered_plot_values(subset[series_by], series_order,
+                                           media=series_by == "Groupe"):
+            strain_data = subset.loc[subset[series_by].astype(str).eq(strain)]
+            color = series_colors[str(strain)]
             od = _mean_sd(strain_data, "DO_corr"); lum = _mean_sd(strain_data, lum_value)
             ox = od["temps_h"].to_numpy(float); oy = od["mean"].to_numpy(float)
             osd = od["std"].fillna(0).to_numpy(float)
@@ -535,9 +565,11 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
     ]
     legend_columns, axes_top = _legend_layout(len(legend_handles), extra_items=2)
     figure.legend([*legend_handles, *style_handles],
-                  [*[_display_strain(line.get_label()) for line in legend_handles],
+                  [*[( _display_strain(line.get_label()) if series_by == "souche" else
+                       _medium_label(line.get_label())) for line in legend_handles],
                    r"OD$_{600}$", "Luminescence (RLU)"],
-                  title="Promoter (color) · Measurement (line)",
+                  title=("Promoter" if series_by == "souche" else "Medium") +
+                        " (color) · Measurement (line)",
                   frameon=False, loc="upper center", bbox_to_anchor=(.5, .92),
                   ncol=legend_columns)
     figure.suptitle(title or "Growth and luminescence", fontweight="bold", y=.995)
@@ -568,9 +600,23 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
                        statistical_biological: pd.DataFrame | None = None,
                        statistical_transform: str = "log10", alternative: str = "two-sided",
                        significant_only: bool = False,
-                       show_technical_replicates: bool = True) -> pd.DataFrame:
+                       show_technical_replicates: bool = True,
+                       medium_order: tuple[str, ...] = (),
+                       reporter_order: tuple[str, ...] = ()) -> pd.DataFrame:
     """Draw one metric panel and return its pairwise statistics."""
-    conditions = list(dict.fromkeys(biological[condition]))
+    if condition == "_comparison":
+        pairs = biological[[condition, "_reporter", "_medium"]].drop_duplicates(condition)
+        reporter_rank = {value: index for index, value in enumerate(reporter_order)}
+        medium_rank = {value: index for index, value in enumerate(medium_order)}
+        pairs["_natural"] = range(len(pairs))
+        pairs["_reporter_rank"] = pairs["_reporter"].map(reporter_rank).fillna(len(reporter_rank))
+        pairs["_medium_rank"] = pairs["_medium"].map(medium_rank).fillna(len(medium_rank))
+        conditions = pairs.sort_values(
+            ["_reporter_rank", "_medium_rank", "_natural"], kind="stable"
+        )[condition].tolist()
+    else:
+        preferred = reporter_order if condition == "souche" else medium_order
+        conditions = ordered_present(biological[condition], preferred)
     if condition == "_comparison":
         reporter_colors = _strain_colors(pd.DataFrame({"souche": biological["_reporter"]}))
         colors = {item: reporter_colors[biological.loc[
@@ -717,7 +763,9 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
                        directional_comparisons: tuple[tuple[str, str], ...] | None = None,
                        statistical_transform: str = "log10", alternative: str = "two-sided",
                        significant_only: bool = False,
-                       show_technical_replicates: bool = True):
+                       show_technical_replicates: bool = True,
+                       medium_order: tuple[str, ...] = (),
+                       reporter_order: tuple[str, ...] = ()):
     """Plot metric distributions, optionally with one panel per medium or strain."""
     required = {"souche", "Groupe", metric}
     if group_by is not None:
@@ -778,8 +826,10 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
         ).agg(diagnostic_aggregations).reset_index()
     else:
         diagnostic_biological = biological.copy()
+    panel_order = reporter_order if group_by == "souche" else medium_order
     panels = ([None] if group_by is None else
-              list(dict.fromkeys(biological[group_by].dropna().astype(str))))
+              _ordered_plot_values(biological[group_by].dropna(), panel_order,
+                                   media=group_by in {"Groupe", "Milieu"}))
     if not panels:
         raise ValueError("No usable data available for the metric figure.")
     if compare_media:
@@ -842,7 +892,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
             statistical_transform=statistical_transform, alternative=alternative,
             directional_comparisons=directional_comparisons,
             significant_only=significant_only,
-            show_technical_replicates=show_technical_replicates)
+            show_technical_replicates=show_technical_replicates,
+            medium_order=medium_order, reporter_order=reporter_order)
         if panel is not None:
             statistics = statistics.assign(panel=panel)
         all_statistics.append(statistics)
@@ -933,9 +984,11 @@ def metric_fold_change_vs_control(metrics: pd.DataFrame, *, metric: str,
 
 def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
                               lum_scale: str = "linear", uncertainty: str = "bars",
-                              title: str = "Control comparison") -> list[tuple[str, object]]:
+                              title: str = "Control comparison",
+                              medium_order: tuple[str, ...] = (),
+                              reporter_order: tuple[str, ...] = ()) -> list[tuple[str, object]]:
     """Build one aligned-panel comparison figure per reporter strain."""
-    strains = list(dict.fromkeys(data["souche"].dropna().astype(str)))
+    strains = ordered_present(data["souche"].dropna(), reporter_order)
     matching = [strain for strain in strains if strain.casefold() == control.casefold()]
     if not matching:
         raise ValueError(f"Control {control!r} is absent from the selected data.")
@@ -944,7 +997,8 @@ def build_control_comparisons(data: pd.DataFrame, *, control: str = "P0-lux",
     for reporter in (strain for strain in strains if strain != actual_control):
         subset = data.loc[data["souche"].astype(str).isin([actual_control, reporter])]
         figure = plot_mixed_panels(subset, lum_scale=lum_scale, uncertainty=uncertainty,
-                                  title=f"{title} — {reporter} vs {actual_control}")
+                                  title=f"{title} — {reporter} vs {actual_control}",
+                                  medium_order=medium_order, reporter_order=reporter_order)
         figures.append((f"comparaison_{reporter}_vs_{actual_control}", figure))
     return figures
 
@@ -960,7 +1014,9 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     significant_only: bool = False,
     show_technical_replicates: bool = True,
     width_scale: float = 1.0,
-    height_scale: float = 1.0) -> list[tuple[str, object]]:
+    height_scale: float = 1.0,
+    medium_order: tuple[str, ...] = (),
+    reporter_order: tuple[str, ...] = ()) -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
     if width_scale <= 0 or height_scale <= 0:
         raise ValueError("Figure width and height scales must be positive.")
@@ -973,13 +1029,15 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     for family, value, suffix, scale, figure_label in choices:
         if family in families and value in data and data[value].notna().any():
             figures.append((suffix, plot_publication_panels(data, value=value, group_by=panel_by,
-                y_scale=scale, title=figure_label)))
+                y_scale=scale, title=figure_label, medium_order=medium_order,
+                reporter_order=reporter_order)))
             if family in {"growth", "corrected"} and _has_multiple_experiments(data):
                 pooled = _pooled_media(data)
                 recap_group = "Milieu" if panel_by == "Groupe" else "souche"
                 figures.append((f"{suffix}_moyenne_experiences", plot_publication_panels(
                     pooled, value=value, group_by=recap_group, y_scale=scale,
-                    title=f"{figure_label} — mean of experiments")))
+                    title=f"{figure_label} — mean of experiments", medium_order=medium_order,
+                    reporter_order=reporter_order)))
     if "mixed" in families:
         mixed_data = _pooled_media(data) if _has_multiple_experiments(data) else data
         if "Milieu" in mixed_data:
@@ -987,7 +1045,8 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
             mixed_data["Groupe"] = mixed_data["Milieu"]
         figures.append(("croissance_luminescence_mixte", plot_mixed_panels(
             mixed_data, lum_scale=lum_scale, uncertainty=uncertainty,
-            title="Growth and non-normalized luminescence", lum_value="Lum_corr")))
+            title="Growth and non-normalized luminescence", lum_value="Lum_corr",
+            medium_order=medium_order, reporter_order=reporter_order, panel_by=panel_by)))
     metric_families = {"peak": ("lum_norm_peak", "pic_luminescence_normalisee", "Peak normalized luminescence"),
                        "peak_time": ("lum_norm_peak_time_h", "temps_pic_luminescence_normalisee",
                                      "Time of normalized luminescence peak"),
@@ -1013,7 +1072,8 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                         directional_comparisons=directional_comparisons,
                         statistical_transform=statistical_transform, alternative=alternative,
                         significant_only=significant_only,
-                        show_technical_replicates=show_technical_replicates)))
+                        show_technical_replicates=show_technical_replicates,
+                        medium_order=medium_order, reporter_order=reporter_order)))
                 else:
                     scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
                     figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
@@ -1021,10 +1081,12 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                         directional_comparisons=directional_comparisons,
                         statistical_transform=statistical_transform, alternative=alternative,
                         significant_only=significant_only,
-                        show_technical_replicates=show_technical_replicates)))
+                        show_technical_replicates=show_technical_replicates,
+                        medium_order=medium_order, reporter_order=reporter_order)))
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
-            uncertainty=uncertainty, title="Targeted control comparison"))
+            uncertainty=uncertainty, title="Targeted control comparison",
+            medium_order=medium_order, reporter_order=reporter_order))
     for _, figure in figures:
         width, height = figure.get_size_inches()
         figure.set_size_inches(width * width_scale, height * height_scale)
