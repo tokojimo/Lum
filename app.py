@@ -132,21 +132,31 @@ def select_display_order(media: list[str], reporters: list[str]) -> tuple[tuple[
     for name, label, present in specifications:
         validated_key = f"guided_display_order_{name}"
         draft_key = f"guided_display_order_{name}_draft"
+        widget_key = f"guided_display_order_{name}_sortable"
         validated = reconcile_display_order(st.session_state.get(validated_key, []), present)
         st.session_state[validated_key] = validated
         draft_seed = reconcile_display_order(st.session_state.get(draft_key, validated), present)
         st.markdown(f"**{label}**")
-        drafts[name] = sort_items(draft_seed, direction="vertical", key=draft_key)
+        sorted_items = sort_items(draft_seed, direction="vertical", key=widget_key)
+        # Keep the component's internal state separate from the business value.
+        # Only a reconciled list of strings is persisted as the editable draft.
+        drafts[name] = reconcile_display_order(sorted_items, present)
+        st.session_state[draft_key] = drafts[name]
 
     controls = st.columns(2)
     if controls[0].button("Valider l'ordre d'affichage", type="primary"):
-        for name, _, _ in specifications:
-            st.session_state[f"guided_display_order_{name}"] = drafts[name]
+        for name, _, present in specifications:
+            st.session_state[f"guided_display_order_{name}"] = reconcile_display_order(
+                drafts[name], present
+            )
         st.rerun()
     if controls[1].button("Réinitialiser l'ordre"):
         for name, _, present in specifications:
             st.session_state[f"guided_display_order_{name}"] = list(present)
             st.session_state[f"guided_display_order_{name}_draft"] = list(present)
+            # Dropping the widget state ensures its next render starts from the
+            # natural draft rather than a stale drag-and-drop arrangement.
+            st.session_state.pop(f"guided_display_order_{name}_sortable", None)
         st.rerun()
     return (tuple(st.session_state["guided_display_order_media"]),
             tuple(st.session_state["guided_display_order_reporters"]))
