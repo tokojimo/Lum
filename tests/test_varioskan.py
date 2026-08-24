@@ -22,7 +22,8 @@ from luxplate.varioskan import (
 @pytest.mark.parametrize(
     ("name", "expected"),
     [("260626_SCFM2Po_Rep1_t0.xlsx", ("260626_SCFM2Po_Rep1", 0)),
-     ("run_t10_valid.xlsx", ("run", 10))],
+     ("run_t10_valid.xlsx", ("run", 10)),
+     ("experiment_t0(3).xlsx", ("experiment", 0))],
 )
 def test_time_point_is_extracted_independently_of_optional_suffix(name, expected):
     assert parse_time_file_name(name) == expected
@@ -42,6 +43,8 @@ def test_time_file_validation_rejects_missing_marker_and_duplicate_point():
         organize_time_files(["rep1.xlsx"])
     with pytest.raises(ValueError, match="Deux fichiers.*t2"):
         organize_time_files(["rep1_t2.xlsx", "rep1_t2_valid.xlsx"])
+    with pytest.raises(ValueError, match="Deux fichiers.*t0"):
+        organize_time_files(["experiment_t0(1).xlsx", "experiment_t0(3).xlsx"])
 
 
 def test_biological_pair_suggestions_use_names_not_file_order():
@@ -162,6 +165,13 @@ def test_one_file_per_time_concatenates_and_maps_real_hours():
     ], {0: 0, 1: .5, 2: 3})
     assert result["time_index"].drop_duplicates().tolist() == [0, 1, 2]
     assert result.groupby("time_index")["temps_h"].first().to_dict() == {0: 0, 1: .5, 2: 3}
+    assert result.groupby("time_index")["lecture"].first().to_dict() == {0: 1, 1: 2, 2: 3}
+    assert result.groupby("time_index")["temps_sec_do"].first().to_dict() == {
+        0: 0, 1: 1800, 2: 10800,
+    }
+    assert result.groupby("time_index")["temps_sec_lum"].first().to_dict() == {
+        0: 0, 1: 1800, 2: 10800,
+    }
     assert result["experience"].unique().tolist() == ["experiment"]
 
 
