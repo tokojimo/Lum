@@ -15,6 +15,7 @@ from luxplate.varioskan import (
     parse_single_time_workbook,
     parse_time_file_name,
     organize_time_files,
+    suggest_regular_time_mapping,
     suggest_biological_pair_id,
 )
 
@@ -36,6 +37,15 @@ def test_time_files_are_grouped_by_experiment_and_sorted_numerically():
     assert [index for index, _ in groups["rep1"]] == [1, 2, 10]
     assert [index for index, _ in groups["rep2"]] == [1]
     assert missing["rep1"] == list(range(3, 10))
+
+
+def test_regular_time_suggestion_uses_indices_and_preserves_gaps():
+    assert suggest_regular_time_mapping([4, 2, 2, 5], first_time=.5, interval=1) == {
+        2: .5, 4: 2.5, 5: 3.5,
+    }
+    assert suggest_regular_time_mapping([]) == {}
+    with pytest.raises(ValueError, match="strictement positif"):
+        suggest_regular_time_mapping([0, 1], interval=0)
 
 
 def test_time_file_validation_rejects_missing_marker_and_duplicate_point():
