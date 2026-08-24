@@ -180,6 +180,29 @@ def _single_time_table(time_hours: float) -> pd.DataFrame:
     return table.loc[table["temps_h"].eq(time_hours)].reset_index(drop=True)
 
 
+def _moving_well_table(sample_rows: str, sample_columns: range, time_index: int) -> pd.DataFrame:
+    """Model the real 12-observation layout: three blanks plus three triplicates."""
+    records = []
+    conditions = [("Blanc", "Blanc", "SCFM2 (Po)")]
+    wells_by_condition = [[f"B{column:02d}" for column in range(1, 4)]]
+    for row, strain in zip(sample_rows, ("PspeD2-3B", "PAO1", "Kpne")):
+        conditions.append(("Souche", strain, "SCFM2 (Po)"))
+        wells_by_condition.append([f"{row}{column:02d}" for column in sample_columns])
+    for (sample_type, strain, group), wells in zip(conditions, wells_by_condition):
+        for replicate, well in enumerate(wells, start=1):
+            physical_value = time_index * 1000 + ord(well[0]) * 10 + int(well[1:])
+            records.append({
+                "temps_h": 0.0, "souche": strain, "Groupe": group,
+                "replicat": replicate, "DO_brute": physical_value / 1000,
+                "Lum_brute": float(physical_value), "type": sample_type,
+                "puits": well, "lecture": 1,
+                "sample_header": f"{group} {strain} ({well})",
+                "temps_sec_do": 0.0, "temps_sec_lum": 0.0,
+                "ecart_temps_s": 0.0,
+            })
+    return pd.DataFrame(records)
+
+
 def test_one_file_per_time_concatenates_and_maps_real_hours():
     result = combine_time_point_tables([
         ("experiment_t2.xlsx", _single_time_table(0)),
@@ -208,12 +231,58 @@ def test_one_file_per_time_keeps_replicates_separate_and_accepts_gaps():
     assert result.groupby("experience")["Groupe"].first().nunique() == 2
 
 
-def test_one_file_per_time_requires_mapping_and_identical_plate_structure():
+def test_one_file_per_time_tracks_mobile_physical_wells_with_stable_curve_ids():
+    tables = [
+        ("real_t0.xlsx", _moving_well_table("FGH", range(10, 13), 0)),
+        ("real_t1.xlsx", _moving_well_table("FGH", range(7, 10), 1)),
+        ("real_t2.xlsx", _moving_well_table("FGH", range(4, 7), 2)),
+    ]
+    result = combine_time_point_tables(tables, {0: 0, 1: 1.5, 2: 4})
+
+    assert result.groupby("time_index").size().to_dict() == {0: 12, 1: 12, 2: 12}
+    assert result.groupby(["time_index", "souche"]).size().eq(3).all()
+    assert result.groupby("sample_header")["time_index"].nunique().eq(3).all()
+    pspe_rep1 = result.query("souche == 'PspeD2-3B' and replicat == 1")
+    assert pspe_rep1["puits"].tolist() == ["F10", "F07", "F04"]
+    assert pspe_rep1["source_sample_header"].tolist() == [
+        "SCFM2 (Po) PspeD2-3B (F10)",
+        "SCFM2 (Po) PspeD2-3B (F07)",
+        "SCFM2 (Po) PspeD2-3B (F04)",
+    ]
+    assert pspe_rep1["Lum_brute"].tolist() == [710, 1707, 2704]
+    assert pspe_rep1["DO_brute"].tolist() == pytest.approx([.710, 1.707, 2.704])
+    assert result.groupby("time_index")["temps_h"].first().to_dict() == {0: 0, 1: 1.5, 2: 4}
+
+
+def test_one_file_per_time_rejects_missing_biological_replicate():
+    complete = _moving_well_table("FGH", range(10, 13), 0)
+    incomplete = _moving_well_table("FGH", range(7, 10), 1)
+    incomplete = incomplete.loc[~(
+        incomplete["souche"].eq("PspeD2-3B") & incomplete["replicat"].eq(3)
+    )]
+    with pytest.raises(ValueError, match="structure biologique.*nombre de réplicats"):
+        combine_time_point_tables([
+            ("real_t0.xlsx", complete), ("real_t1.xlsx", incomplete),
+        ], {0: 0, 1: 1})
+
+
+def test_one_file_per_time_missing_index_is_reported_without_artificial_rows():
+    names = [f"real_t{index}.xlsx" for index in (0, 1, 2, 3, 5)]
+    _, missing = organize_time_files(names)
+    tables = [(name, _moving_well_table("FGH", range(10, 13), index))
+              for name, index in zip(names, (0, 1, 2, 3, 5))]
+    result = combine_time_point_tables(tables, {index: float(index) for index in (0, 1, 2, 3, 5)})
+    assert missing == {"real": [4]}
+    assert result["time_index"].drop_duplicates().tolist() == [0, 1, 2, 3, 5]
+    assert len(result) == 5 * 12
+
+
+def test_one_file_per_time_requires_mapping_and_identical_biological_structure():
     first = _single_time_table(0)
     with pytest.raises(ValueError, match="n'est pas défini"):
         combine_time_point_tables([("run_t0.xlsx", first)], {})
     changed = first.loc[first["puits"].ne("A01")].copy()
-    with pytest.raises(ValueError, match="structure de plaque"):
+    with pytest.raises(ValueError, match="structure biologique"):
         combine_time_point_tables([
             ("run_t0.xlsx", first), ("run_t1.xlsx", changed)
         ], {0: 0, 1: 1})
@@ -227,7 +296,7 @@ def test_per_time_and_legacy_modes_have_equivalent_internal_measurements():
     ], {0: 0, 1: 1})
     legacy = combine_kinetic_tables([("run.xlsx", complete)])
     scientific = [column for column in complete.columns if column not in {
-        "temps_sec_do", "temps_sec_lum"
+        "temps_sec_do", "temps_sec_lum", "sample_header"
     }]
     order = ["type", "souche", "replicat", "temps_h"]
     pd.testing.assert_frame_equal(
