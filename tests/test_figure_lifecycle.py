@@ -6,6 +6,7 @@ from pandas.testing import assert_frame_equal
 
 from luxplate.export import figure_bytes
 from luxplate.figure_lifecycle import (
+    filter_result_strains,
     invalidate_guided_analysis_state,
     validate_figure_render,
 )
@@ -46,6 +47,28 @@ def assert_visible_auc(figure):
     output = BytesIO()
     figure.savefig(output, format="png")
     assert output.tell() > 0
+
+
+def test_result_strain_navigation_rebuilds_auc_without_replacing_complete_result():
+    """A result filter changes figures, not the completed scientific analysis."""
+    normalized = publication_table()
+    complete_result = object()
+    original_result_id = id(complete_result)
+
+    strain_a = filter_result_strains(normalized, ["P0-lux"])
+    figure_a = auc_figure(strain_a, directional_comparisons=())
+    strain_b = filter_result_strains(normalized, ["Reporter-lux"])
+    figure_b = auc_figure(strain_b, directional_comparisons=())
+    strain_a_again = filter_result_strains(normalized, ["P0-lux"])
+    figure_a_again = auc_figure(strain_a_again, directional_comparisons=())
+
+    assert id(complete_result) == original_result_id
+    assert strain_a["souche"].unique().tolist() == ["P0-lux"]
+    assert strain_b["souche"].unique().tolist() == ["Reporter-lux"]
+    assert_frame_equal(strain_a.reset_index(drop=True), strain_a_again.reset_index(drop=True))
+    for figure in (figure_a, figure_b, figure_a_again):
+        assert_visible_auc(figure)
+        plt.close(figure)
 
 
 def test_selection_change_discards_all_old_directional_widget_state():

@@ -13,7 +13,8 @@ from luxplate.blanks import run_blank_correction
 from luxplate.crosstalk import correct_plate_crosstalk
 from luxplate.export import figure_bytes, package_figures
 from luxplate.display_order import reconcile_display_order
-from luxplate.figure_lifecycle import (invalidate_guided_analysis_state,
+from luxplate.figure_lifecycle import (filter_result_strains,
+                                       invalidate_guided_analysis_state,
                                        validate_figure_render)
 from luxplate.plotting import (build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
@@ -351,6 +352,23 @@ def render_guided_results(complete, base: str) -> None:
             "Choisissez les figures à afficher : elles sont régénérées dès qu'une option change, "
             "sans relancer l'analyse."
         )
+        normalized_data = complete.normalization.normalized_data
+        result_strain_options = sorted(normalized_data["souche"].dropna().unique())
+        # This is display state only.  In particular it is intentionally absent
+        # from ``guided_signature``, which represents the inputs to the
+        # scientific calculation.
+        displayed_strains = st.multiselect(
+            "Souches à afficher",
+            result_strain_options,
+            default=result_strain_options,
+            key="guided_result_strains",
+            help=("Filtre uniquement les figures finales déjà calculées ; aucune correction "
+                  "ni analyse n'est relancée."),
+        )
+        if not displayed_strains:
+            st.info("Sélectionnez au moins une souche à afficher.")
+            return
+        figure_data = filter_result_strains(normalized_data, displayed_strains)
         guided_family_labels = {
             "Croissance corrigée": "growth",
             "Luminescence non normalisée": "corrected",
@@ -397,7 +415,7 @@ def render_guided_results(complete, base: str) -> None:
         )
         st.markdown("##### Ordre d'affichage")
         available_conditions = directional_condition_options(
-            complete.normalization.normalized_data
+            figure_data
         ).values()
         available_pairs = [condition.split("\0", 1) for condition in available_conditions]
         natural_reporters = list(dict.fromkeys(pair[0] for pair in available_pairs))
@@ -446,7 +464,7 @@ def render_guided_results(complete, base: str) -> None:
                    "Chaque choix teste la condition à gauche comme supérieure à celle de droite.")
             )
             guided_selected_comparisons = select_directional_comparisons(
-                complete.normalization.normalized_data,
+                figure_data,
                 key="guided_directional_comparisons",
             )
         guided_figures = []
@@ -483,7 +501,7 @@ def render_guided_results(complete, base: str) -> None:
             # not put them in session state: a fragment from the previous run
             # may still reference its canvas while this app rerun is rendered.
             guided_figures = build_current_publication_figures(
-                complete.normalization.normalized_data, **figure_parameters
+                figure_data, **figure_parameters
             )
             assert guided_figures, "La construction n'a produit aucune figure."
             statistical_results = collect_publication_statistics(guided_figures)
