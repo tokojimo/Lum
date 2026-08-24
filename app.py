@@ -26,7 +26,8 @@ from luxplate.varioskan import (assign_biological_pair_ids, combine_kinetic_tabl
                                combine_time_point_tables, organize_time_files,
                                inspect_workbook, parse_kinetic_workbook,
                                parse_single_time_workbook,
-                               suggest_biological_pair_id)
+                               suggest_biological_pair_id,
+                               suggest_regular_time_mapping)
 from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
                                filter_experiment_data, run_complete_analysis)
 
@@ -711,7 +712,8 @@ with guided_tab:
         invalidate_guided_analysis_state(st.session_state)
         for key in ("guided_selection_identity", "guided_pair_mapping",
                     "guided_validated_pair_mapping", "guided_validated_selection",
-                    "guided_time_mapping"):
+                    "guided_time_mapping", "guided_time_mapping_identity",
+                    "guided_validated_time_mapping"):
             st.session_state.pop(key, None)
     st.session_state["guided_import_mode_applied"] = import_mode
     per_time_mode = import_mode == "Un fichier par temps"
@@ -771,12 +773,39 @@ with guided_tab:
                         "Temps réel (h)": [None] * len(indices),
                     })
                     st.session_state["guided_time_mapping_identity"] = raw_identity
+                    st.session_state.pop("guided_validated_time_mapping", None)
                     invalidate_guided_analysis_state(st.session_state)
                 st.subheader("Correspondance des temps expérimentaux")
                 st.caption(
                     "Les indices tX servent uniquement à trier les fichiers : renseignez le temps "
                     "réel en heures pour chaque point."
                 )
+                with st.expander("Préremplir une série régulière", expanded=True):
+                    st.caption(
+                        "Lum peut proposer les temps à partir d'un premier point et d'un pas "
+                        "constant. La proposition reste modifiable et doit être validée."
+                    )
+                    time_col1, time_col2 = st.columns(2)
+                    first_time = time_col1.number_input(
+                        "Temps du premier point (h)", value=0.0, step=0.5,
+                        key="guided_first_time",
+                    )
+                    time_interval = time_col2.number_input(
+                        "Un point toutes les (h)", min_value=0.0001, value=1.0,
+                        step=0.5, key="guided_time_interval",
+                    )
+                    if st.button("Proposer ces temps", key="guided_suggest_times"):
+                        suggestion = suggest_regular_time_mapping(
+                            indices, first_time=first_time, interval=time_interval,
+                        )
+                        st.session_state["guided_time_mapping"] = pd.DataFrame({
+                            "Point": [f"t{index}" for index in indices],
+                            "Temps réel (h)": [suggestion[index] for index in indices],
+                        })
+                        st.session_state.pop("guided_validated_time_mapping", None)
+                        st.session_state.pop("guided_time_mapping_editor", None)
+                        invalidate_guided_analysis_state(st.session_state)
+                        st.rerun()
                 edited_times = st.data_editor(
                     st.session_state["guided_time_mapping"], disabled=["Point"],
                     hide_index=True, use_container_width=True,
@@ -787,6 +816,7 @@ with guided_tab:
                 previous_times = st.session_state["guided_time_mapping"]
                 if not edited_times.equals(previous_times):
                     invalidate_guided_analysis_state(st.session_state)
+                    st.session_state.pop("guided_validated_time_mapping", None)
                 st.session_state["guided_time_mapping"] = edited_times.copy()
                 mapping = {
                     int(point[1:]): value for point, value in
@@ -802,7 +832,19 @@ with guided_tab:
                         st.warning("Points temporels absents : " + ", ".join(
                             f"t{index}" for index in missing_points[experiment]
                         ))
-                guided_data = combine_time_point_tables(guided_inputs, mapping)
+                if st.button("Valider les temps expérimentaux", type="primary"):
+                    if any(pd.isna(value) for value in mapping.values()):
+                        st.error("Renseignez tous les temps réels avant de valider.")
+                    else:
+                        st.session_state["guided_validated_time_mapping"] = tuple(
+                            sorted(mapping.items())
+                        )
+                validated_times = st.session_state.get("guided_validated_time_mapping")
+                if validated_times != tuple(sorted(mapping.items())):
+                    st.info("Vérifiez la proposition, puis validez les temps expérimentaux.")
+                    st.stop()
+                st.success("Temps expérimentaux validés.")
+                guided_data = combine_time_point_tables(guided_inputs, dict(validated_times))
             else:
                 guided_data = combine_kinetic_tables(guided_inputs)
             guided_import_progress.progress(100, text="Chargement terminé")

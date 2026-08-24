@@ -502,6 +502,26 @@ def organize_time_files(names: Iterable[str]) -> tuple[dict[str, list[tuple[int,
     return groups, missing
 
 
+def suggest_regular_time_mapping(
+    indices: Iterable[int], *, first_time: float = 0.0, interval: float = 1.0,
+) -> dict[int, float]:
+    """Propose real times for file indices sampled at a regular interval.
+
+    The numeric ``tX`` value determines the position in the series.  This also
+    preserves the intended elapsed time when an intermediate file is absent.
+    """
+    points = sorted(set(indices))
+    if not points:
+        return {}
+    if interval <= 0:
+        raise ValueError("L'intervalle entre deux points doit être strictement positif.")
+    origin = points[0]
+    return {
+        index: float(first_time + (index - origin) * interval)
+        for index in points
+    }
+
+
 def _plate_signature(table: pd.DataFrame) -> pd.DataFrame:
     required = {"sample_header", "puits", "type", "souche", "Groupe", "replicat"}
     absent = sorted(required - set(table.columns))
