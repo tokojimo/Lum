@@ -12,6 +12,7 @@ from luxplate.varioskan import (
     inspect_workbook,
     normalize_strain_name,
     parse_kinetic_workbook,
+    parse_single_time_workbook,
     parse_time_file_name,
     organize_time_files,
     suggest_biological_pair_id,
@@ -92,6 +93,60 @@ def synthetic_workbook(*, second_luminescence=False) -> BytesIO:
     workbook.save(output)
     output.seek(0)
     return output
+
+
+def single_time_workbook(*, mismatched_name=False, missing_lum=False) -> BytesIO:
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    names = ["Blanc1", "Blanc1", "Blanc1", *([None] * 9)]
+    for sheet_name, marker, values in [
+        ("Absorbance 2_01", "Abs", [.0866, .0902, .0877, *([None] * 9)]),
+        ("Luminescence 1000_02", "RLU", [118.9, 152.6, 182.8, *([None] * 9)]),
+    ]:
+        sheet = workbook.create_sheet(sheet_name)
+        sheet.append(["métadonnées variables"])
+        sheet.append([None])
+        sheet.append([marker, *range(1, 13)])
+        sheet.append(["A", *([None] * 12)])
+        sheet.append(["B", *values])
+        for letter in "CDEFGH":
+            sheet.append([letter, *([None] * 12)])
+        sheet.append([])
+        sheet.append(["Échantillon", *range(1, 13)])
+        sheet.append(["A", *([None] * 12)])
+        sheet.append(["B", *names])
+        for letter in "CDEFGH":
+            sheet.append([letter, *([None] * 12)])
+    if mismatched_name:
+        workbook["Luminescence 1000_02"].cell(15, 2).value = "Autre"
+    if missing_lum:
+        workbook["Luminescence 1000_02"].cell(5, 2).value = None
+    plan = workbook.create_sheet("Plan de plaque")
+    plan.append([None, *range(1, 13)])
+    plan.append(["B", *names])
+    plan.append([None, "Groupe 1", "Groupe 1", "Groupe 1"])
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def test_single_time_parser_matches_abs_and_rlu_matrices_by_well():
+    result = parse_single_time_workbook(single_time_workbook())
+    assert result["puits"].tolist() == ["B01", "B02", "B03"]
+    assert result["DO_brute"].tolist() == pytest.approx([.0866, .0902, .0877])
+    assert result["Lum_brute"].tolist() == pytest.approx([118.9, 152.6, 182.8])
+    assert result["sample_header"].tolist() == [
+        "Blanc1 (B01)", "Blanc1 (B02)", "Blanc1 (B03)",
+    ]
+    assert result["replicat"].tolist() == [1, 2, 3]
+
+
+def test_single_time_parser_rejects_name_disagreement_and_missing_measurement():
+    with pytest.raises(ValueError, match="diffèrent pour le puits B01"):
+        parse_single_time_workbook(single_time_workbook(mismatched_name=True))
+    with pytest.raises(ValueError, match="n'a pas de valeur RLU"):
+        parse_single_time_workbook(single_time_workbook(missing_lum=True))
 
 
 def _single_time_table(time_hours: float) -> pd.DataFrame:
