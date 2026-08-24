@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from io import BytesIO
 
 import pandas as pd
@@ -27,6 +28,15 @@ from luxplate.workflow import (build_bulk_point_decisions, build_manual_decision
                                filter_experiment_data, run_complete_analysis)
 
 st.set_page_config(page_title="LuxPlate Analyzer", page_icon="🧫", layout="wide")
+st.session_state["_debug_full_run_id"] = st.session_state.get("_debug_full_run_id", 0) + 1
+
+
+def _figure_debug(event: str, **fields) -> None:
+    """Emit temporary, grep-friendly figure diagnostics to the server terminal."""
+    run_id = st.session_state.get("_debug_full_run_id", "unknown")
+    print(f"[LUM-FIG-DEBUG] {event} run_id={run_id}", flush=True)
+    for name, value in fields.items():
+        print(f"[LUM-FIG-DEBUG] run_id={run_id} {name}={value!r}", flush=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -112,7 +122,13 @@ def build_current_publication_figures(
     ``st.cache_data``: Matplotlib and render/export operations mutate them and a
     later rerun could consequently receive a closed or stale canvas.
     """
-    return build_publication_figures(
+    _figure_debug(
+        "PUBLICATION_BUILDER_ENTER", context="full_render", data_id=id(data),
+        directional_comparisons_count=len(directional_comparisons),
+        directional_comparisons=directional_comparisons, families=families,
+        alternative=alternative, statistical_transform=statistical_transform,
+    )
+    figures = build_publication_figures(
         data, title=title, families=families, panel_by=panel_by, lum_scale=lum_scale,
         metric_scale=metric_scale,
         directional_comparisons=directional_comparisons,
@@ -120,7 +136,13 @@ def build_current_publication_figures(
         statistical_transform=statistical_transform, alternative=alternative,
         width_scale=width_scale, height_scale=height_scale,
         medium_order=medium_order, reporter_order=reporter_order,
+        diagnostic_run_id=st.session_state.get("_debug_full_run_id", "unknown"),
     )
+    _figure_debug("PUBLICATION_BUILDER_EXIT", figures_count=len(figures))
+    for name, figure in figures:
+        _figure_debug("PUBLICATION_BUILDER_EXIT_FIGURE", figure_name=name,
+                      figure_id=id(figure), axes_count=len(figure.axes))
+    return figures
 
 
 @st.fragment
@@ -192,6 +214,13 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
                  and pair[0] != pair[1]]
     validated = list(dict.fromkeys(validated))
     st.session_state[validated_key] = validated
+    _figure_debug(
+        "HYPOTHESES_ENTER", context="hypotheses_fragment", stack_key=stack_key,
+        validated_key=validated_key, stack=stack, validated=validated,
+        stack_count=len(stack), validated_count=len(validated),
+    )
+    _figure_debug("HYPOTHESES_AFTER_RERUN", context="hypotheses_fragment",
+                  validated=validated, validated_count=len(validated))
 
     st.markdown("**Ajout manuel**")
     columns = st.columns(2)
@@ -281,6 +310,11 @@ def select_directional_comparisons(data: pd.DataFrame, *, key: str) -> tuple[tup
         key=f"{key}_validate", type="primary", disabled=not pending_changes,
         help="Les figures et les tests ne sont recalculés qu'après cette validation.",
     ):
+        _figure_debug(
+            "HYPOTHESES_VALIDATE", context="hypotheses_fragment",
+            old_validated=validated, new_stack=stack,
+            old_count=len(validated), new_count=len(stack),
+        )
         st.session_state[validated_key] = list(stack)
         # Only validation must invalidate the caller's figure gallery.  Being
         # explicit here avoids treating this as another fragment-only rerun.
@@ -433,6 +467,18 @@ def render_guided_results(complete, base: str) -> None:
                 medium_order=guided_medium_order,
                 reporter_order=guided_reporter_order,
             )
+            _figure_debug(
+                "FIGURE_BUILD_REQUEST", context="full_render",
+                families=figure_parameters["families"],
+                directional_comparisons=guided_selected_comparisons,
+                directional_comparisons_count=len(guided_selected_comparisons),
+                statistical_transform=guided_transform, alternative=guided_alternative,
+                medium_order=guided_medium_order, reporter_order=guided_reporter_order,
+                metric_scale=figure_parameters["metric_scale"],
+            )
+            for comparison_index, (left, right) in enumerate(guided_selected_comparisons):
+                _figure_debug("FIGURE_BUILD_COMPARISON", context="full_render",
+                              index=comparison_index, comparison=f"{left} -> {right}")
             # Figures are render-local mutable resources.  In particular, do
             # not put them in session state: a fragment from the previous run
             # may still reference its canvas while this app rerun is rendered.
@@ -454,8 +500,16 @@ def render_guided_results(complete, base: str) -> None:
                 # Matplotlib object that remains needed below and for export.
                 preview_png = figure_bytes(guided_figure, "png", dpi=150)
                 assert preview_png, "La génération de l'aperçu PNG a échoué."
-                st.image(preview_png, use_container_width=True)
                 statistics = getattr(guided_figure, "_luxplate_statistics", pd.DataFrame())
+                _figure_debug(
+                    "PNG_PREVIEW", context="full_render", figure_name=guided_name,
+                    figure_id=id(guided_figure), png_size=len(preview_png),
+                    sha256=hashlib.sha256(preview_png).hexdigest(),
+                    axes_count=len(guided_figure.axes), statistics_count=len(statistics),
+                    brackets_count=sum(getattr(axis, "_luxplate_brackets_drawn", 0)
+                                       for axis in guided_figure.axes),
+                )
+                st.image(preview_png, use_container_width=True)
                 if not statistics.empty:
                     visible_statistics = statistics.copy()
                     for column in ("condition_1", "condition_2"):

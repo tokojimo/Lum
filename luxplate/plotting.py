@@ -27,6 +27,13 @@ DEFAULT_CURVE_Y_SCALE = "linear"
 DEFAULT_BOXPLOT_Y_SCALE = "log"
 BRACKET_ENDPOINT_GAP = .04
 
+
+def _figure_debug(event: str, run_id, **fields) -> None:
+    """Print temporary figure-flow diagnostics without touching calculations."""
+    print(f"[LUM-FIG-DEBUG] {event} run_id={run_id}", flush=True)
+    for name, value in fields.items():
+        print(f"[LUM-FIG-DEBUG] run_id={run_id} {name}={value!r}", flush=True)
+
 # The reporters used routinely in the laboratory keep their visual identity in
 # every figure, independently of CSV row order or newly added strains.
 REPORTER_COLORS = {
@@ -602,7 +609,8 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
                        significant_only: bool = False,
                        show_technical_replicates: bool = True,
                        medium_order: tuple[str, ...] = (),
-                       reporter_order: tuple[str, ...] = ()) -> pd.DataFrame:
+                       reporter_order: tuple[str, ...] = (),
+                       diagnostic_run_id="unknown") -> pd.DataFrame:
     """Draw one metric panel and return its pairwise statistics."""
     if condition == "_comparison":
         pairs = biological[[condition, "_reporter", "_medium"]].drop_duplicates(condition)
@@ -617,6 +625,15 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
     else:
         preferred = reporter_order if condition == "souche" else medium_order
         conditions = ordered_present(biological[condition], preferred)
+    if metric.startswith("lum_norm_auc"):
+        _figure_debug(
+            "AUC_PLOT_ENTER", diagnostic_run_id, metric=metric,
+            compare_media=condition == "_comparison",
+            directional_comparisons=directional_comparisons,
+            directional_comparisons_count=(None if directional_comparisons is None
+                                           else len(directional_comparisons)),
+            x_condition_order=conditions,
+        )
     if condition == "_comparison":
         reporter_colors = _strain_colors(pd.DataFrame({"souche": biological["_reporter"]}))
         colors = {item: reporter_colors[biological.loc[
@@ -722,6 +739,16 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
         comparisons=effective_comparisons,
         transform=statistical_transform, alternative=alternative,
     )
+    if metric.startswith("lum_norm_auc"):
+        _figure_debug("AUC_STATS", diagnostic_run_id,
+                      statistics_rows=len(comparisons))
+        for row_index, row in enumerate(comparisons.itertuples(index=False)):
+            _figure_debug(
+                "AUC_STATS_ROW", diagnostic_run_id, index=row_index,
+                condition_1=row.condition_1, condition_2=row.condition_2,
+                alternative=row.alternative, p_raw=row.p_raw,
+                p_adjusted=row.p_adjusted, calculation_status=row.calculation_status,
+            )
     positions = {item: index for index, item in enumerate(conditions)}
     usable = comparisons.loc[comparisons["condition_1"].isin(positions)
                              & comparisons["condition_2"].isin(positions)]
@@ -746,14 +773,29 @@ def _draw_metric_panel(axis, technical: pd.DataFrame, biological: pd.DataFrame, 
             axis.set_ylim(np.exp(np.log(low) - .12 * log_span),
                           np.exp(np.log(high) + (.42 + .18 * level_count) * log_span))
     spacing = min(.075, .30 / max(1, level_count))
-    for level, (left, right), comparison in zip(
-            levels, draw_coordinates, usable.itertuples(index=False)):
+    brackets_drawn = 0
+    for bracket_index, (level, (left, right), comparison) in enumerate(zip(
+            levels, draw_coordinates, usable.itertuples(index=False))):
         y = .66 + spacing * level
         p_label = _significance_stars(comparison.p_raw)
         axis.plot([left, left, right, right], [y - .012, y, y, y - .012],
                   transform=transform, color="#333333", lw=.7, clip_on=False)
         axis.text((left + right) / 2, y + .006, p_label, transform=transform,
                   ha="center", va="bottom", fontsize=7)
+        brackets_drawn += 1
+        if metric.startswith("lum_norm_auc"):
+            _figure_debug(
+                "BRACKET_DRAW", diagnostic_run_id, index=bracket_index,
+                condition_A=comparison.condition_1, condition_B=comparison.condition_2,
+                x1=left, x2=right, level=level, label=p_label,
+            )
+    axis._luxplate_brackets_drawn = brackets_drawn
+    if metric.startswith("lum_norm_auc"):
+        _figure_debug(
+            "BRACKET_SUMMARY", diagnostic_run_id,
+            requested_comparisons=len(effective_comparisons),
+            statistics_rows=len(comparisons), brackets_drawn=brackets_drawn,
+        )
     return comparisons
 
 
@@ -765,7 +807,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
                        significant_only: bool = False,
                        show_technical_replicates: bool = True,
                        medium_order: tuple[str, ...] = (),
-                       reporter_order: tuple[str, ...] = ()):
+                       reporter_order: tuple[str, ...] = (),
+                       diagnostic_run_id="unknown"):
     """Plot metric distributions, optionally with one panel per medium or strain."""
     required = {"souche", "Groupe", metric}
     if group_by is not None:
@@ -893,7 +936,8 @@ def plot_metric_points(metrics: pd.DataFrame, *, metric: str, y_scale: str = DEF
             directional_comparisons=directional_comparisons,
             significant_only=significant_only,
             show_technical_replicates=show_technical_replicates,
-            medium_order=medium_order, reporter_order=reporter_order)
+            medium_order=medium_order, reporter_order=reporter_order,
+            diagnostic_run_id=diagnostic_run_id)
         if panel is not None:
             statistics = statistics.assign(panel=panel)
         all_statistics.append(statistics)
@@ -1016,7 +1060,8 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     width_scale: float = 1.0,
     height_scale: float = 1.0,
     medium_order: tuple[str, ...] = (),
-    reporter_order: tuple[str, ...] = ()) -> list[tuple[str, object]]:
+    reporter_order: tuple[str, ...] = (),
+    diagnostic_run_id="unknown") -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
     if width_scale <= 0 or height_scale <= 0:
         raise ValueError("Figure width and height scales must be positive.")
@@ -1073,7 +1118,8 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                         statistical_transform=statistical_transform, alternative=alternative,
                         significant_only=significant_only,
                         show_technical_replicates=show_technical_replicates,
-                        medium_order=medium_order, reporter_order=reporter_order)))
+                        medium_order=medium_order, reporter_order=reporter_order,
+                        diagnostic_run_id=diagnostic_run_id)))
                 else:
                     scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
                     figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
@@ -1082,7 +1128,8 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                         statistical_transform=statistical_transform, alternative=alternative,
                         significant_only=significant_only,
                         show_technical_replicates=show_technical_replicates,
-                        medium_order=medium_order, reporter_order=reporter_order)))
+                        medium_order=medium_order, reporter_order=reporter_order,
+                        diagnostic_run_id=diagnostic_run_id)))
     if "control" in families:
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
             uncertainty=uncertainty, title="Targeted control comparison",
