@@ -458,7 +458,7 @@ def combine_kinetic_tables(
     return pd.concat(combined, ignore_index=True, sort=False)
 
 
-TIME_FILE_RE = re.compile(r"_t(?P<index>\d+)(?=$|[_\-.])", re.IGNORECASE)
+TIME_FILE_RE = re.compile(r"_t(?P<index>\d+)(?=$|[(_\-.])", re.IGNORECASE)
 
 
 def parse_time_file_name(name: str) -> tuple[str, int]:
@@ -541,7 +541,7 @@ def combine_time_point_tables(
             normalized["temps_sec_do"] = normalized["temps_h"] * 3600.0
             normalized["temps_sec_lum"] = normalized["temps_h"] * 3600.0
             normalized["ecart_temps_s"] = 0
-            normalized["lecture"] = files.index((index, name)) + 1
+            normalized["lecture"] = index + 1
             normalized["experience"] = experiment
             namespace = f"exp{position}|"
             normalized["Groupe"] = namespace + normalized["Groupe"].fillna("").astype(str)

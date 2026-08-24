@@ -739,10 +739,21 @@ with guided_tab:
             for file_index, upload in enumerate(guided_uploads):
                 payload = upload.getvalue()
                 _, lum_sheets = cached_workbook_sheets(payload)
-                lum = st.selectbox(f"Luminescence — {upload.name}", lum_sheets,
-                                   key=f"guided_lum_{file_index}_{upload.name}")
-                parser = cached_single_time_workbook if per_time_mode else cached_kinetic_workbook
-                guided_inputs.append((upload.name, parser(payload, lum)))
+                if len(lum_sheets) == 1:
+                    lum = lum_sheets[0]
+                else:
+                    lum = st.selectbox(
+                        f"Luminescence — {upload.name}", lum_sheets,
+                        key=f"guided_lum_{file_index}_{upload.name}",
+                    )
+                # Select the workbook format before parsing.  In particular,
+                # endpoint matrices must never pass through the historical
+                # parser, which requires kinetic time/reading headers.
+                if per_time_mode:
+                    table = cached_single_time_workbook(payload, lum)
+                else:
+                    table = cached_kinetic_workbook(payload, lum)
+                guided_inputs.append((upload.name, table))
                 guided_identity.append((upload.name, hash(payload), lum))
                 guided_import_progress.progress(
                     int((file_index + 1) / len(guided_uploads) * 90),
