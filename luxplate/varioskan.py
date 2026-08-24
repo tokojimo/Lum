@@ -8,6 +8,7 @@ raw values and the French column names used by the subsequent legacy stages.
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import BinaryIO, Iterable
 
@@ -257,6 +258,129 @@ def _plate_groups(sheet) -> dict[str, str]:
     return groups
 
 
+def _matrix_marker(value: object) -> str:
+    """Normalize a Varioskan matrix title for language-independent matching."""
+    text = unicodedata.normalize("NFKD", clean_text(value))
+    return "".join(character for character in text if not unicodedata.combining(character)).casefold()
+
+
+def _plate_matrix(sheet, markers: set[str], description: str) -> dict[str, object]:
+    """Find and read an A-H by 1-12 matrix without relying on export row offsets."""
+    normalized_markers = {_matrix_marker(marker) for marker in markers}
+    header_row = None
+    number_columns: dict[int, int] = {}
+    for row in range(1, sheet.max_row + 1):
+        if _matrix_marker(sheet.cell(row, 1).value) not in normalized_markers:
+            continue
+        candidate: dict[int, int] = {}
+        for column in range(2, sheet.max_column + 1):
+            try:
+                number = int(clean_text(sheet.cell(row, column).value))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= number <= 12 and number not in candidate:
+                candidate[number] = column
+        if set(candidate) == set(range(1, 13)):
+            header_row, number_columns = row, candidate
+            break
+    if header_row is None:
+        raise ValueError(
+            f"Impossible de trouver la matrice {description} (entête 1..12) "
+            f"dans la feuille {sheet.title!r}."
+        )
+
+    values: dict[str, object] = {}
+    found_rows: set[str] = set()
+    for row in range(header_row + 1, sheet.max_row + 1):
+        letter = clean_text(sheet.cell(row, 1).value).upper()
+        if letter in PLATE_ROWS and letter not in found_rows:
+            found_rows.add(letter)
+            for number, column in number_columns.items():
+                values[f"{letter}{number:02d}"] = sheet.cell(row, column).value
+            if found_rows == PLATE_ROWS:
+                break
+        elif found_rows and _matrix_marker(sheet.cell(row, 1).value) in {
+            "abs", "absorbance", "rlu", "echantillon", "sample", "samples"
+        }:
+            break
+    if not found_rows:
+        raise ValueError(f"Aucune ligne A..H détectée dans la matrice {description} de {sheet.title!r}.")
+    return values
+
+
+def parse_single_time_workbook(
+    source: str | Path | BinaryIO,
+    luminescence_sheet: str | None = None,
+) -> pd.DataFrame:
+    """Parse one endpoint-style Varioskan workbook as a single time point.
+
+    Unlike :func:`parse_kinetic_workbook`, this parser consumes the plate
+    matrices headed by ``Abs``, ``RLU`` and ``Échantillon``.  Both paths emit
+    the same long-table schema before entering the scientific pipeline.
+    """
+    workbook = load_workbook(source, read_only=False, data_only=True)
+    try:
+        absorbance_sheet, luminescence_sheets = find_measurement_sheets(workbook.sheetnames)
+        if luminescence_sheet is None:
+            if len(luminescence_sheets) > 1:
+                raise ValueError("Plusieurs feuilles de luminescence détectées : choisissez-en une explicitement.")
+            luminescence_sheet = luminescence_sheets[0]
+        if luminescence_sheet not in luminescence_sheets:
+            raise ValueError(f"Feuille de luminescence inconnue : {luminescence_sheet!r}.")
+        plan_names = [name for name in workbook.sheetnames if _matrix_marker(name) == "plan de plaque"]
+        if not plan_names:
+            raise ValueError("La feuille 'Plan de plaque' est absente.")
+
+        absorbance = _plate_matrix(workbook[absorbance_sheet], {"Abs", "Absorbance"}, "d'absorbance")
+        luminescence = _plate_matrix(workbook[luminescence_sheet], {"RLU"}, "de luminescence")
+        sample_markers = {"Échantillon", "Echantillon", "Sample", "Samples"}
+        absorbance_names = _plate_matrix(workbook[absorbance_sheet], sample_markers, "des échantillons")
+        luminescence_names = _plate_matrix(workbook[luminescence_sheet], sample_markers, "des échantillons")
+
+        named_wells = []
+        for well in sorted(set(absorbance_names) | set(luminescence_names)):
+            do_name = clean_text(absorbance_names.get(well))
+            lum_name = clean_text(luminescence_names.get(well))
+            if do_name != lum_name:
+                raise ValueError(
+                    f"Les noms d'échantillon diffèrent pour le puits {well} : "
+                    f"absorbance={do_name!r}, luminescence={lum_name!r}."
+                )
+            if do_name:
+                named_wells.append((well, do_name))
+        if not named_wells:
+            raise ValueError("Aucun puits nommé n'a été détecté dans les matrices Échantillon.")
+
+        rows = []
+        for well, name in named_wells:
+            do_value = pd.to_numeric(absorbance.get(well), errors="coerce")
+            lum_value = pd.to_numeric(luminescence.get(well), errors="coerce")
+            if pd.isna(do_value) or pd.isna(lum_value):
+                missing = "DO" if pd.isna(do_value) else "RLU"
+                raise ValueError(f"Le puits nommé {well} ({name}) n'a pas de valeur {missing} exploitable.")
+            header = f"{name} ({well})"
+            rows.append({**_sample_metadata(header), "DO_brute": float(do_value),
+                         "Lum_brute": float(lum_value)})
+
+        metadata = pd.DataFrame(rows)
+        metadata["Groupe"] = _resolve_groups(metadata, _plate_groups(workbook[plan_names[0]]))
+        metadata = _canonicalize_technical_suffixes(metadata)
+        metadata["replicat"] = metadata.groupby(["souche", "Groupe"], sort=False).cumcount() + 1
+        metadata["temps_h"] = 0.0
+        metadata["lecture"] = 1
+        metadata["temps_sec_do"] = 0.0
+        metadata["temps_sec_lum"] = 0.0
+        metadata["ecart_temps_s"] = 0.0
+        columns = [
+            "temps_h", "souche", "Groupe", "replicat", "DO_brute", "Lum_brute",
+            "type", "puits", "lecture", "sample_header", "temps_sec_do",
+            "temps_sec_lum", "ecart_temps_s",
+        ]
+        return metadata[columns].sort_values(["type", "souche", "replicat"]).reset_index(drop=True)
+    finally:
+        workbook.close()
+
+
 def parse_kinetic_workbook(
     source: str | Path | BinaryIO,
     luminescence_sheet: str | None = None,
@@ -414,6 +538,10 @@ def combine_time_point_tables(
             normalized = frame.copy(deep=True)
             normalized["time_index"] = index
             normalized["temps_h"] = float(time_mapping[index])
+            normalized["temps_sec_do"] = normalized["temps_h"] * 3600.0
+            normalized["temps_sec_lum"] = normalized["temps_h"] * 3600.0
+            normalized["ecart_temps_s"] = 0
+            normalized["lecture"] = files.index((index, name)) + 1
             normalized["experience"] = experiment
             namespace = f"exp{position}|"
             normalized["Groupe"] = namespace + normalized["Groupe"].fillna("").astype(str)

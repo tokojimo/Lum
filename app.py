@@ -25,6 +25,7 @@ from luxplate.statistics import all_pairwise_comparisons
 from luxplate.varioskan import (assign_biological_pair_ids, combine_kinetic_tables,
                                combine_time_point_tables, organize_time_files,
                                inspect_workbook, parse_kinetic_workbook,
+                               parse_single_time_workbook,
                                suggest_biological_pair_id)
 from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
                                filter_experiment_data, run_complete_analysis)
@@ -51,6 +52,12 @@ def cached_workbook_sheets(payload: bytes) -> tuple[str, list[str]]:
 def cached_kinetic_workbook(payload: bytes, luminescence_sheet: str) -> pd.DataFrame:
     """Parse an unchanged workbook/sheet selection only once."""
     return parse_kinetic_workbook(BytesIO(payload), luminescence_sheet)
+
+
+@st.cache_data(show_spinner=False)
+def cached_single_time_workbook(payload: bytes, luminescence_sheet: str) -> pd.DataFrame:
+    """Parse and cache an endpoint-style, one-file-per-time workbook."""
+    return parse_single_time_workbook(BytesIO(payload), luminescence_sheet)
 
 
 @st.cache_data(show_spinner="Analyse en cours…")
@@ -734,7 +741,8 @@ with guided_tab:
                 _, lum_sheets = cached_workbook_sheets(payload)
                 lum = st.selectbox(f"Luminescence — {upload.name}", lum_sheets,
                                    key=f"guided_lum_{file_index}_{upload.name}")
-                guided_inputs.append((upload.name, cached_kinetic_workbook(payload, lum)))
+                parser = cached_single_time_workbook if per_time_mode else cached_kinetic_workbook
+                guided_inputs.append((upload.name, parser(payload, lum)))
                 guided_identity.append((upload.name, hash(payload), lum))
                 guided_import_progress.progress(
                     int((file_index + 1) / len(guided_uploads) * 90),
