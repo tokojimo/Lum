@@ -334,6 +334,98 @@ def combine_kinetic_tables(
     return pd.concat(combined, ignore_index=True, sort=False)
 
 
+TIME_FILE_RE = re.compile(r"_t(?P<index>\d+)(?=$|[_\-.])", re.IGNORECASE)
+
+
+def parse_time_file_name(name: str) -> tuple[str, int]:
+    """Return the experiment stem and numeric time point encoded in ``name``.
+
+    Text after the marker is deliberately ignored, so ``run_t2_valid.xlsx``
+    conflicts with ``run_t2.xlsx`` instead of silently becoming another run.
+    """
+    stem = Path(name).stem
+    matches = list(TIME_FILE_RE.finditer(stem))
+    if not matches:
+        raise ValueError(f"Le fichier {name!r} ne contient pas de point '_tX'.")
+    match = matches[-1]
+    experiment = clean_text(stem[:match.start()])
+    if not experiment:
+        raise ValueError(f"Le fichier {name!r} n'a pas d'identifiant d'expérience avant '_tX'.")
+    return experiment, int(match.group("index"))
+
+
+def organize_time_files(names: Iterable[str]) -> tuple[dict[str, list[tuple[int, str]]], dict[str, list[int]]]:
+    """Group names by experiment, reject duplicates, and report index gaps."""
+    groups: dict[str, list[tuple[int, str]]] = {}
+    seen: dict[tuple[str, int], list[str]] = {}
+    for name in names:
+        experiment, index = parse_time_file_name(name)
+        groups.setdefault(experiment, []).append((index, name))
+        seen.setdefault((experiment, index), []).append(name)
+    conflicts = [(key, files) for key, files in seen.items() if len(files) > 1]
+    if conflicts:
+        experiment, index = conflicts[0][0]
+        files = "\n- ".join(conflicts[0][1])
+        raise ValueError(
+            f"Deux fichiers correspondent au point t{index} de l'expérience {experiment} :\n"
+            f"- {files}\nVeuillez conserver un seul fichier pour ce point temporel."
+        )
+    missing: dict[str, list[int]] = {}
+    for experiment, files in groups.items():
+        files.sort(key=lambda item: item[0])
+        indices = [item[0] for item in files]
+        missing[experiment] = sorted(set(range(min(indices), max(indices) + 1)) - set(indices))
+    return groups, missing
+
+
+def _plate_signature(table: pd.DataFrame) -> pd.DataFrame:
+    required = {"sample_header", "puits", "type", "souche", "Groupe", "replicat"}
+    absent = sorted(required - set(table.columns))
+    if absent:
+        raise ValueError(f"Colonnes nécessaires absentes : {', '.join(absent)}.")
+    return (table[list(sorted(required))].drop_duplicates()
+            .sort_values(list(sorted(required))).reset_index(drop=True))
+
+
+def combine_time_point_tables(
+    tables: Iterable[tuple[str, pd.DataFrame]], time_mapping: dict[int, float],
+) -> pd.DataFrame:
+    """Normalize one-workbook-per-time input to Lum's standard long table."""
+    items = list(tables)
+    groups, _ = organize_time_files(name for name, _ in items)
+    by_name = dict(items)
+    combined: list[pd.DataFrame] = []
+    for position, (experiment, files) in enumerate(groups.items(), start=1):
+        reference = None
+        for index, name in files:
+            if index not in time_mapping or pd.isna(time_mapping[index]):
+                raise ValueError(f"Le temps réel du point t{index} n'est pas défini.")
+            frame = by_name[name]
+            if frame["temps_h"].nunique(dropna=False) != 1:
+                raise ValueError(f"Le fichier {name!r} doit contenir un seul temps de mesure.")
+            signature = _plate_signature(frame)
+            if reference is None:
+                reference = signature
+            elif not signature.equals(reference):
+                raise ValueError(
+                    f"La structure de plaque ou le nombre de puits diffère dans {name!r} "
+                    f"pour l'expérience {experiment}."
+                )
+            normalized = frame.copy(deep=True)
+            normalized["time_index"] = index
+            normalized["temps_h"] = float(time_mapping[index])
+            normalized["experience"] = experiment
+            namespace = f"exp{position}|"
+            normalized["Groupe"] = namespace + normalized["Groupe"].fillna("").astype(str)
+            normalized["sample_header"] = namespace + normalized["sample_header"].fillna("").astype(str)
+            combined.append(normalized)
+    if not combined:
+        raise ValueError("Ajoutez au moins un classeur à analyser.")
+    return pd.concat(combined, ignore_index=True, sort=False).sort_values(
+        ["experience", "time_index", "type", "souche", "replicat"]
+    ).reset_index(drop=True)
+
+
 def suggest_biological_pair_id(experience: object) -> str:
     """Suggest an editable cross-file biological identity from a run name.
 

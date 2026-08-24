@@ -23,6 +23,7 @@ from luxplate.plotting import (build_guided_corrected_figures,
 from luxplate.project import PROJECT_KEYS, export_project, import_project
 from luxplate.statistics import all_pairwise_comparisons
 from luxplate.varioskan import (assign_biological_pair_ids, combine_kinetic_tables,
+                               combine_time_point_tables, organize_time_files,
                                inspect_workbook, parse_kinetic_workbook,
                                suggest_biological_pair_id)
 from luxplate.workflow import (build_bulk_point_decisions, build_manual_decisions,
@@ -693,6 +694,20 @@ with guided_tab:
         "Déposez un ou plusieurs fichiers, vérifiez les souches détectées, retirez si nécessaire "
         "des points ou des courbes, puis lancez tout le calcul en une fois."
     )
+    import_mode = st.radio(
+        "Mode d'import",
+        ("Un fichier contient tous les temps", "Un fichier par temps"),
+        horizontal=True, key="guided_import_mode",
+    )
+    previous_mode = st.session_state.get("guided_import_mode_applied")
+    if previous_mode is not None and previous_mode != import_mode:
+        invalidate_guided_analysis_state(st.session_state)
+        for key in ("guided_selection_identity", "guided_pair_mapping",
+                    "guided_validated_pair_mapping", "guided_validated_selection",
+                    "guided_time_mapping"):
+            st.session_state.pop(key, None)
+    st.session_state["guided_import_mode_applied"] = import_mode
+    per_time_mode = import_mode == "Un fichier par temps"
     guided_uploads = st.file_uploader(
         "Déposer un ou plusieurs classeurs Varioskan (.xlsx ou .xlsm)", type=["xlsx", "xlsm"],
         accept_multiple_files=True, key="guided_upload"
@@ -725,13 +740,63 @@ with guided_tab:
                     int((file_index + 1) / len(guided_uploads) * 90),
                     text=f"Classeur {file_index + 1}/{len(guided_uploads)} lu",
                 )
-            guided_data = combine_kinetic_tables(guided_inputs)
+            raw_identity = (import_mode, tuple(guided_identity))
+            if per_time_mode:
+                time_groups, missing_points = organize_time_files(
+                    name for name, _ in guided_inputs
+                )
+                indices = sorted({index for files in time_groups.values() for index, _ in files})
+                if st.session_state.get("guided_time_mapping_identity") != raw_identity:
+                    st.session_state["guided_time_mapping"] = pd.DataFrame({
+                        "Point": [f"t{index}" for index in indices],
+                        "Temps réel (h)": [None] * len(indices),
+                    })
+                    st.session_state["guided_time_mapping_identity"] = raw_identity
+                    invalidate_guided_analysis_state(st.session_state)
+                st.subheader("Correspondance des temps expérimentaux")
+                st.caption(
+                    "Les indices tX servent uniquement à trier les fichiers : renseignez le temps "
+                    "réel en heures pour chaque point."
+                )
+                edited_times = st.data_editor(
+                    st.session_state["guided_time_mapping"], disabled=["Point"],
+                    hide_index=True, use_container_width=True,
+                    column_config={"Temps réel (h)": st.column_config.NumberColumn(
+                        "Temps réel (h)", required=True, format="%.4g"
+                    )}, key="guided_time_mapping_editor",
+                )
+                previous_times = st.session_state["guided_time_mapping"]
+                if not edited_times.equals(previous_times):
+                    invalidate_guided_analysis_state(st.session_state)
+                st.session_state["guided_time_mapping"] = edited_times.copy()
+                mapping = {
+                    int(point[1:]): value for point, value in
+                    edited_times[["Point", "Temps réel (h)"]].itertuples(index=False, name=None)
+                }
+                for experiment, files in time_groups.items():
+                    st.markdown(f"**Expérience : {experiment}** — {len(files)} fichier(s) détecté(s)")
+                    st.caption(" · ".join(
+                        f"t{index} → {mapping[index]:g} h" if not pd.isna(mapping[index]) else f"t{index} → non défini"
+                        for index, _ in files
+                    ))
+                    if missing_points[experiment]:
+                        st.warning("Points temporels absents : " + ", ".join(
+                            f"t{index}" for index in missing_points[experiment]
+                        ))
+                guided_data = combine_time_point_tables(guided_inputs, mapping)
+            else:
+                guided_data = combine_kinetic_tables(guided_inputs)
             guided_import_progress.progress(100, text="Chargement terminé")
             guided_import_progress.empty()
         except Exception as error:
             st.error(f"Import impossible : {error}")
         else:
-            selection_identity = tuple(guided_identity)
+            time_identity = ()
+            if per_time_mode:
+                time_identity = tuple(
+                    st.session_state["guided_time_mapping"].itertuples(index=False, name=None)
+                )
+            selection_identity = (import_mode, tuple(guided_identity), time_identity)
             if (st.session_state.get("guided_selection_identity") != selection_identity
                     or "guided_pair_mapping" not in st.session_state):
                 # A newly uploaded workbook must not silently reuse draft or
