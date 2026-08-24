@@ -10,7 +10,7 @@ from streamlit_sortables import sort_items
 
 from luxplate.blanks import run_blank_correction
 from luxplate.crosstalk import correct_plate_crosstalk
-from luxplate.export import package_figures
+from luxplate.export import figure_bytes, package_figures
 from luxplate.display_order import reconcile_display_order
 from luxplate.figure_lifecycle import (invalidate_guided_analysis_state,
                                        validate_figure_render)
@@ -450,9 +450,11 @@ def render_guided_results(complete, base: str) -> None:
                 # Kept out of the normal interface, but available in server
                 # logs when diagnosing a deployment-specific renderer issue.
                 print(f"LuxPlate figure {guided_name}: {render_diagnostic}")
-                # Be explicit: Streamlit must not clear this mutable Figure;
-                # it is still needed below for statistics and export.
-                st.pyplot(guided_figure, use_container_width=True, clear_figure=False)
+                # Give Streamlit an immutable preview rather than the mutable
+                # Matplotlib object that remains needed below and for export.
+                preview_png = figure_bytes(guided_figure, "png", dpi=150)
+                assert preview_png, "La génération de l'aperçu PNG a échoué."
+                st.image(preview_png, use_container_width=True)
                 statistics = getattr(guided_figure, "_luxplate_statistics", pd.DataFrame())
                 if not statistics.empty:
                     visible_statistics = statistics.copy()

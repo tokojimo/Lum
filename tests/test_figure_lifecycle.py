@@ -2,7 +2,9 @@ from io import BytesIO
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from pandas.testing import assert_frame_equal
 
+from luxplate.export import figure_bytes
 from luxplate.figure_lifecycle import (
     invalidate_guided_analysis_state,
     validate_figure_render,
@@ -162,10 +164,12 @@ def test_hypothesis_reruns_build_fresh_figures_statistics_and_brackets():
     stacks = (
         tuple((conditions[0], item) for item in conditions[1:9]),
         tuple((conditions[0], item) for item in conditions[1:5]),
-        tuple((conditions[1], item) for item in conditions[5:8]),
+        tuple((conditions[1], item) for item in conditions[5:7]),
         (),
+        tuple((conditions[2], item) for item in conditions[6:10]),
     )
     former = None
+    former_preview = None
 
     for comparisons in stacks:
         figure = auc_figure(
@@ -189,6 +193,41 @@ def test_hypothesis_reruns_build_fresh_figures_statistics_and_brackets():
             if len(line.get_xdata()) == 4 and len(line.get_ydata()) == 4
         ]
         assert len(bracket_lines) == len(comparisons)
+
+        axes_before = tuple(figure.axes)
+        artist_counts_before = tuple(
+            len(axis.lines) + len(axis.collections) + len(axis.patches) + len(axis.artists)
+            for axis in figure.axes
+        )
+        statistics_before = statistics.copy(deep=True)
+        diagnostics_before = tuple(figure._luxplate_statistical_diagnostics)
+        preview = figure_bytes(figure, "png", dpi=150)
+
+        assert preview.startswith(b"\x89PNG")
+        assert len(preview) > 0
+        assert tuple(figure.axes) == axes_before
+        assert tuple(
+            len(axis.lines) + len(axis.collections) + len(axis.patches) + len(axis.artists)
+            for axis in figure.axes
+        ) == artist_counts_before
+        assert_frame_equal(figure._luxplate_statistics, statistics_before)
+        assert tuple(figure._luxplate_statistical_diagnostics) == diagnostics_before
+        if former_preview is not None:
+            assert preview != former_preview
+
+        # Preview generation must leave this exact Figure reusable by all
+        # publication export formats.
+        for export_format, signature in (
+            ("svg", b"<svg"), ("pdf", b"%PDF"),
+            ("tiff", (b"II", b"MM")),
+        ):
+            payload = figure_bytes(figure, export_format, dpi=72)
+            if isinstance(signature, tuple):
+                assert payload[:2] in signature
+            else:
+                assert signature in payload[:500]
+
         former = figure
+        former_preview = preview
 
     plt.close(former)
