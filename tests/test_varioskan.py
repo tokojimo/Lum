@@ -38,13 +38,36 @@ def test_time_files_are_grouped_by_experiment_and_sorted_numerically():
     assert missing["rep1"] == list(range(3, 10))
 
 
-def test_time_file_validation_rejects_missing_marker_and_duplicate_point():
+def test_time_file_validation_resolves_validated_version_and_rejects_ambiguous_duplicate():
     with pytest.raises(ValueError, match="ne contient pas"):
         organize_time_files(["rep1.xlsx"])
-    with pytest.raises(ValueError, match="Deux fichiers.*t2"):
-        organize_time_files(["rep1_t2.xlsx", "rep1_t2_valid.xlsx"])
+    groups, _ = organize_time_files(["rep1_t2.xlsx", "rep1_t2_valid.xlsx"])
+    assert groups["rep1"] == [(2, "rep1_t2_valid.xlsx")]
+    assert groups.duplicate_resolutions[("rep1", 2)] == (
+        "rep1_t2_valid.xlsx", ("rep1_t2.xlsx", "rep1_t2_valid.xlsx"),
+    )
     with pytest.raises(ValueError, match="Deux fichiers.*t0"):
         organize_time_files(["experiment_t0(1).xlsx", "experiment_t0(3).xlsx"])
+
+
+def test_time_groups_are_stable_when_shuffled_and_keep_replicates_separate():
+    ordered = [
+        f"260702_SCFM2Po_Rep{rep}_t{index}.xlsx"
+        for rep in range(1, 4) for index in range(8)
+    ]
+    shuffled = ordered[::2][::-1] + ordered[1::2]
+    groups, missing = organize_time_files(shuffled)
+    assert set(groups) == {f"260702_SCFM2Po_Rep{rep}" for rep in range(1, 4)}
+    assert all([index for index, _ in files] == list(range(8)) for files in groups.values())
+    assert all(points == [] for points in missing.values())
+
+
+def test_validated_duplicate_does_not_manufacture_a_later_time_point():
+    names = [f"260626_SCFM2Po_Rep1_t{index}.xlsx" for index in range(8)]
+    names.insert(3, "260626_SCFM2Po_Rep1_t2_valid.xlsx")
+    groups, _ = organize_time_files(names)
+    assert [index for index, _ in groups["260626_SCFM2Po_Rep1"]] == list(range(8))
+    assert groups["260626_SCFM2Po_Rep1"][2][1].endswith("_t2_valid.xlsx")
 
 
 def test_biological_pair_suggestions_use_names_not_file_order():

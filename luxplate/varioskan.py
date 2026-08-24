@@ -458,7 +458,22 @@ def combine_kinetic_tables(
     return pd.concat(combined, ignore_index=True, sort=False)
 
 
-TIME_FILE_RE = re.compile(r"_t(?P<index>\d+)(?=$|[(_\-.])", re.IGNORECASE)
+TIME_FILE_RE = re.compile(r"_t(?P<index>\d+)(?!\d)", re.IGNORECASE)
+
+
+class TimeFileGroups(dict[str, list[tuple[int, str]]]):
+    """Active files grouped by experiment, with explicit duplicate decisions.
+
+    Keeping this as a ``dict`` subclass preserves the public return shape of
+    :func:`organize_time_files` while making automatic ``_valid`` selections
+    available to the import UI instead of silently discarding the original.
+    """
+
+    duplicate_resolutions: dict[tuple[str, int], tuple[str, tuple[str, ...]]]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.duplicate_resolutions = {}
 
 
 def parse_time_file_name(name: str) -> tuple[str, int]:
@@ -479,14 +494,30 @@ def parse_time_file_name(name: str) -> tuple[str, int]:
 
 
 def organize_time_files(names: Iterable[str]) -> tuple[dict[str, list[tuple[int, str]]], dict[str, list[int]]]:
-    """Group names by experiment, reject duplicates, and report index gaps."""
-    groups: dict[str, list[tuple[int, str]]] = {}
+    """Group names by experiment, resolve validated versions, and report gaps.
+
+    A plain ``tX`` file paired with exactly one ``tX_valid`` file is resolved
+    in favour of the validated file and recorded in ``duplicate_resolutions``.
+    Every other collision remains ambiguous and is rejected clearly.
+    """
+    groups = TimeFileGroups()
     seen: dict[tuple[str, int], list[str]] = {}
     for name in names:
         experiment, index = parse_time_file_name(name)
-        groups.setdefault(experiment, []).append((index, name))
         seen.setdefault((experiment, index), []).append(name)
-    conflicts = [(key, files) for key, files in seen.items() if len(files) > 1]
+
+    conflicts: list[tuple[tuple[str, int], list[str]]] = []
+    for (experiment, index), files in seen.items():
+        active = files[0]
+        if len(files) > 1:
+            normal = [name for name in files if _time_file_suffix(name) == ""]
+            validated = [name for name in files if _time_file_suffix(name).lower() == "_valid"]
+            if len(files) == 2 and len(normal) == 1 and len(validated) == 1:
+                active = validated[0]
+                groups.duplicate_resolutions[(experiment, index)] = (active, tuple(files))
+            else:
+                conflicts.append(((experiment, index), files))
+        groups.setdefault(experiment, []).append((index, active))
     if conflicts:
         experiment, index = conflicts[0][0]
         files = "\n- ".join(conflicts[0][1])
@@ -500,6 +531,13 @@ def organize_time_files(names: Iterable[str]) -> tuple[dict[str, list[tuple[int,
         indices = [item[0] for item in files]
         missing[experiment] = sorted(set(range(min(indices), max(indices) + 1)) - set(indices))
     return groups, missing
+
+
+def _time_file_suffix(name: str) -> str:
+    """Return the filename text following its final encoded ``tX`` marker."""
+    stem = Path(name).stem
+    matches = list(TIME_FILE_RE.finditer(stem))
+    return stem[matches[-1].end():] if matches else ""
 
 
 def _plate_signature(table: pd.DataFrame) -> pd.DataFrame:

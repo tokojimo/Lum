@@ -794,10 +794,21 @@ with guided_tab:
                 }
                 for experiment, files in time_groups.items():
                     st.markdown(f"**Expérience : {experiment}** — {len(files)} fichier(s) détecté(s)")
-                    st.caption(" · ".join(
-                        f"t{index} → {mapping[index]:g} h" if not pd.isna(mapping[index]) else f"t{index} → non défini"
-                        for index, _ in files
-                    ))
+                    point_labels = []
+                    for index, _ in files:
+                        label = (f"t{index} → {mapping[index]:g} h" if not pd.isna(mapping[index])
+                                 else f"t{index} → non défini")
+                        resolution = time_groups.duplicate_resolutions.get((experiment, index))
+                        if resolution:
+                            label += f"  ⚠ {len(resolution[1])} fichiers détectés"
+                        point_labels.append(label)
+                    st.caption(" · ".join(point_labels))
+                    for (resolved_experiment, index), (active, candidates) in time_groups.duplicate_resolutions.items():
+                        if resolved_experiment == experiment:
+                            original = next(name for name in candidates if name != active)
+                            st.info(
+                                f"t{index} : {original} a été remplacé par la version validée {active}."
+                            )
                     if missing_points[experiment]:
                         st.warning("Points temporels absents : " + ", ".join(
                             f"t{index}" for index in missing_points[experiment]
