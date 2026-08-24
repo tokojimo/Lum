@@ -8,11 +8,39 @@ from openpyxl import Workbook, load_workbook
 from luxplate.varioskan import (
     assign_biological_pair_ids,
     combine_kinetic_tables,
+    combine_time_point_tables,
     inspect_workbook,
     normalize_strain_name,
     parse_kinetic_workbook,
+    parse_time_file_name,
+    organize_time_files,
     suggest_biological_pair_id,
 )
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [("260626_SCFM2Po_Rep1_t0.xlsx", ("260626_SCFM2Po_Rep1", 0)),
+     ("run_t10_valid.xlsx", ("run", 10))],
+)
+def test_time_point_is_extracted_independently_of_optional_suffix(name, expected):
+    assert parse_time_file_name(name) == expected
+
+
+def test_time_files_are_grouped_by_experiment_and_sorted_numerically():
+    groups, missing = organize_time_files([
+        "rep1_t10.xlsx", "rep2_t1.xlsx", "rep1_t2.xlsx", "rep1_t1.xlsx",
+    ])
+    assert [index for index, _ in groups["rep1"]] == [1, 2, 10]
+    assert [index for index, _ in groups["rep2"]] == [1]
+    assert missing["rep1"] == list(range(3, 10))
+
+
+def test_time_file_validation_rejects_missing_marker_and_duplicate_point():
+    with pytest.raises(ValueError, match="ne contient pas"):
+        organize_time_files(["rep1.xlsx"])
+    with pytest.raises(ValueError, match="Deux fichiers.*t2"):
+        organize_time_files(["rep1_t2.xlsx", "rep1_t2_valid.xlsx"])
 
 
 def test_biological_pair_suggestions_use_names_not_file_order():
@@ -64,6 +92,60 @@ def synthetic_workbook(*, second_luminescence=False) -> BytesIO:
     workbook.save(output)
     output.seek(0)
     return output
+
+
+def _single_time_table(time_hours: float) -> pd.DataFrame:
+    table = parse_kinetic_workbook(synthetic_workbook())
+    return table.loc[table["temps_h"].eq(time_hours)].reset_index(drop=True)
+
+
+def test_one_file_per_time_concatenates_and_maps_real_hours():
+    result = combine_time_point_tables([
+        ("experiment_t2.xlsx", _single_time_table(0)),
+        ("experiment_t0.xlsx", _single_time_table(0)),
+        ("experiment_t1.xlsx", _single_time_table(0)),
+    ], {0: 0, 1: .5, 2: 3})
+    assert result["time_index"].drop_duplicates().tolist() == [0, 1, 2]
+    assert result.groupby("time_index")["temps_h"].first().to_dict() == {0: 0, 1: .5, 2: 3}
+    assert result["experience"].unique().tolist() == ["experiment"]
+
+
+def test_one_file_per_time_keeps_replicates_separate_and_accepts_gaps():
+    result = combine_time_point_tables([
+        ("rep1_t0.xlsx", _single_time_table(0)),
+        ("rep1_t2.xlsx", _single_time_table(0)),
+        ("rep2_t0.xlsx", _single_time_table(0)),
+    ], {0: 0, 2: 6})
+    assert set(result["experience"]) == {"rep1", "rep2"}
+    assert result.groupby("experience")["Groupe"].first().nunique() == 2
+
+
+def test_one_file_per_time_requires_mapping_and_identical_plate_structure():
+    first = _single_time_table(0)
+    with pytest.raises(ValueError, match="n'est pas défini"):
+        combine_time_point_tables([("run_t0.xlsx", first)], {})
+    changed = first.loc[first["puits"].ne("A01")].copy()
+    with pytest.raises(ValueError, match="structure de plaque"):
+        combine_time_point_tables([
+            ("run_t0.xlsx", first), ("run_t1.xlsx", changed)
+        ], {0: 0, 1: 1})
+
+
+def test_per_time_and_legacy_modes_have_equivalent_internal_measurements():
+    complete = parse_kinetic_workbook(synthetic_workbook())
+    split = combine_time_point_tables([
+        ("run_t0.xlsx", complete.query("temps_h == 0")),
+        ("run_t1.xlsx", complete.query("temps_h == 1")),
+    ], {0: 0, 1: 1})
+    legacy = combine_kinetic_tables([("run.xlsx", complete)])
+    scientific = [column for column in complete.columns if column not in {
+        "temps_sec_do", "temps_sec_lum"
+    }]
+    order = ["type", "souche", "replicat", "temps_h"]
+    pd.testing.assert_frame_equal(
+        legacy.sort_values(order)[scientific].reset_index(drop=True),
+        split.sort_values(order)[scientific].reset_index(drop=True),
+    )
 
 
 def workbook_with_strain_headers(headers: list[str]) -> BytesIO:
