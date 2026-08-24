@@ -10,6 +10,7 @@ from __future__ import annotations
 from io import BytesIO
 from typing import MutableMapping
 
+import pandas as pd
 from matplotlib.figure import Figure
 
 
@@ -20,6 +21,21 @@ LEGACY_PUBLICATION_STATE_KEYS = {
     "guided_publication_statistics",
     "guided_publication_diagnostics",
 }
+
+
+def filter_result_strains(
+    data: pd.DataFrame, strains: list[str] | tuple[str, ...]
+) -> pd.DataFrame:
+    """Return calculated rows for the strains selected only for display.
+
+    This deliberately operates on normalized output rather than input data: a
+    result-view choice must never become part of the scientific analysis
+    signature or trigger any correction/calculation stage again.
+    """
+    if "souche" not in data.columns:
+        raise ValueError("Les résultats normalisés ne contiennent pas de colonne 'souche'.")
+    selected = set(strains)
+    return data.loc[data["souche"].isin(selected)].copy()
 
 
 def invalidate_guided_analysis_state(state: MutableMapping[str, object]) -> None:
