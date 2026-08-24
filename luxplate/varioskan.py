@@ -541,7 +541,14 @@ def _time_file_suffix(name: str) -> str:
 
 
 def _plate_signature(table: pd.DataFrame) -> pd.DataFrame:
-    required = {"sample_header", "puits", "type", "souche", "Groupe", "replicat"}
+    """Return the biological composition of one endpoint plate.
+
+    In the one-file-per-time workflow, wells are physical observations rather
+    than sample identities: an otherwise identical technical replicate may be
+    moved between time points.  Replicate numbers preserve multiplicity, so a
+    missing or additional replicate still changes this signature.
+    """
+    required = {"type", "souche", "Groupe", "replicat"}
     absent = sorted(required - set(table.columns))
     if absent:
         raise ValueError(f"Colonnes nécessaires absentes : {', '.join(absent)}.")
@@ -570,10 +577,13 @@ def combine_time_point_tables(
                 reference = signature
             elif not signature.equals(reference):
                 raise ValueError(
-                    f"La structure de plaque ou le nombre de puits diffère dans {name!r} "
+                    f"La structure biologique ou le nombre de réplicats diffère dans {name!r} "
                     f"pour l'expérience {experiment}."
                 )
             normalized = frame.copy(deep=True)
+            # Keep the workbook label (including its physical well) for audit,
+            # while exposing a time-stable identity to the scientific pipeline.
+            normalized["source_sample_header"] = normalized["sample_header"]
             normalized["time_index"] = index
             normalized["temps_h"] = float(time_mapping[index])
             normalized["temps_sec_do"] = normalized["temps_h"] * 3600.0
@@ -582,8 +592,15 @@ def combine_time_point_tables(
             normalized["lecture"] = index + 1
             normalized["experience"] = experiment
             namespace = f"exp{position}|"
+            logical_group = normalized["Groupe"].fillna("").astype(str)
             normalized["Groupe"] = namespace + normalized["Groupe"].fillna("").astype(str)
-            normalized["sample_header"] = namespace + normalized["sample_header"].fillna("").astype(str)
+            normalized["sample_header"] = (
+                namespace
+                + normalized["type"].fillna("").astype(str) + "|"
+                + normalized["souche"].fillna("").astype(str) + "|"
+                + logical_group + "|rep"
+                + normalized["replicat"].astype(str)
+            )
             combined.append(normalized)
     if not combined:
         raise ValueError("Ajoutez au moins un classeur à analyser.")
