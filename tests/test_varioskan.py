@@ -257,6 +257,40 @@ def test_one_file_per_time_tracks_mobile_physical_wells_with_stable_curve_ids():
     assert result.groupby("time_index")["temps_h"].first().to_dict() == {0: 0, 1: 1.5, 2: 4}
 
 
+def test_one_file_per_time_end_to_end_produces_visible_auc_figures():
+    from luxplate.figure_lifecycle import validate_figure_render
+    from luxplate.kinetics import run_kinetics
+    from luxplate.plotting import build_publication_figures
+
+    tables = [
+        (f"real_t{index}.xlsx", _moving_well_table(rows, columns, index))
+        for index, (rows, columns) in enumerate((
+            ("FGH", range(10, 13)), ("CDE", range(7, 10)),
+            ("HAB", range(4, 7)), ("DEF", range(1, 4)),
+        ))
+    ]
+    combined = combine_time_point_tables(tables, {0: 0, 1: 1, 2: 2, 3: 3})
+    # Stand in for the normal blank-correction stage while retaining the real
+    # endpoint-import identities and moving physical-well audit columns.
+    combined["DO_corr"] = .1 + .08 * combined["temps_h"] + .01 * combined["replicat"]
+    combined["Lum_corr"] = 100 + 25 * combined["temps_h"] + combined["replicat"]
+    combined["Lum_norm"] = combined["Lum_corr"] / combined["DO_corr"]
+    combined["type"] = combined["type"].str.lower()
+
+    result = run_kinetics(combined)
+
+    assert len(result.series_metrics) == 9
+    assert result.series_metrics.groupby("souche").size().eq(3).all()
+    assert result.series_metrics["n_auc_points"].eq(4).all()
+    assert result.series_metrics["lum_norm_auc"].notna().all()
+    assert combined.query("type == 'souche'").groupby(
+        ["souche", "replicat"]
+    )["puits"].nunique().gt(1).all()
+    figures = build_publication_figures(combined, families=("auc",))
+    assert [name for name, _ in figures] == ["auc_luminescence_normalisee"]
+    assert validate_figure_render(figures[0][1])["populated_axes"] > 0
+
+
 def test_one_file_per_time_rejects_missing_biological_replicate():
     complete = _moving_well_table("FGH", range(10, 13), 0)
     incomplete = _moving_well_table("FGH", range(7, 10), 1)

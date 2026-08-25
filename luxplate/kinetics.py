@@ -206,8 +206,26 @@ def calculate_luminescence_metrics(
 
 
 def _series_group_columns(data: pd.DataFrame) -> list[str]:
-    """Canonical identity retains experiment, condition, replicate, header and well."""
-    columns = [column for column in IDENTITY_COLUMNS if column in data]
+    """Return the stable biological identity of a time series.
+
+    A physical well is acquisition metadata, not a series identifier: split-file
+    imports may move the same logical replicate to a different well at every
+    time point.  ``sample_header`` (or the remaining biological fields) carries
+    the stable identity instead.  The well column remains present in the input
+    and public metric schema for traceability, but is not a split-file key.
+    """
+    preferred = (
+        "biological_pair_id", "experience_id", "experience", "souche",
+        "Groupe", "sample_header", "replicat",
+    )
+    columns = [column for column in preferred if column in data]
+    # Endpoint imports are explicitly tagged by ``time_index`` and retain the
+    # originating workbook.  In historical all-times-in-one-workbook tables,
+    # distinct technical wells can legitimately share a header and must remain
+    # distinct series, so preserve the legacy well key there.
+    is_split_time_import = "time_index" in data and "source_workbook" in data
+    if not is_split_time_import and "puits" in data:
+        columns.append("puits")
     if not columns:
         raise ValueError("Impossible de construire une clé canonique de série.")
     return columns

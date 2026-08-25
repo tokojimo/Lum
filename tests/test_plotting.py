@@ -1239,3 +1239,8 @@ def test_kinetics_legend_excludes_blanks_and_deduplicates_strains():
     }
     assert first_axis_colors == second_axis_colors
     plt.close(figure)
+
+
+def test_auc_family_is_omitted_when_no_auc_is_calculable():
+    data = _publication_table().groupby("sample_header", sort=False).head(1)
+    assert build_publication_figures(data, families=("auc",)) == []

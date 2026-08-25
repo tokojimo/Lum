@@ -95,6 +95,31 @@ def test_experiments_are_strictly_separate_and_inputs_unchanged():
     pdt.assert_frame_equal(data, original)
 
 
+def test_physical_well_changes_do_not_split_a_logical_kinetic_replicate():
+    data = pd.concat([
+        kinetic_table(header=f"S1-rep{replicate}").assign(
+            replicat=replicate,
+            puits=[wells[replicate - 1] for wells in (
+                ("A01", "A02", "A03"), ("C05", "C06", "C07"),
+                ("H08", "H09", "H10"), ("B03", "B04", "B05"),
+                ("D01", "D02", "D03"),
+            )],
+        )
+        for replicate in (1, 2, 3)
+    ], ignore_index=True)
+    data["time_index"] = data["temps_h"].astype(int)
+    data["source_workbook"] = data["time_index"].map(lambda value: f"run_t{value}.xlsx")
+    original_wells = data["puits"].tolist()
+
+    result = run_kinetics(data)
+
+    assert len(result.series_metrics) == 3
+    assert result.series_metrics["n_points_total"].tolist() == [5, 5, 5]
+    assert result.series_metrics["n_auc_points"].tolist() == [5, 5, 5]
+    assert result.series_metrics["lum_norm_auc"].notna().all()
+    assert data["puits"].tolist() == original_wells
+
+
 def test_workbook_experience_names_preserve_all_runs_with_shifted_time_ranges():
     """Legacy uploads use ``experience``, not ``experience_id``."""
     names = (
