@@ -23,6 +23,7 @@ from luxplate.plotting import (build_guided_corrected_figures,
 from luxplate.project import PROJECT_KEYS, export_project, import_project
 from luxplate.statistics import all_pairwise_comparisons
 from luxplate.varioskan import (assign_biological_pair_ids, combine_kinetic_tables,
+                               combine_mixed_tables,
                                combine_time_point_tables, organize_time_files,
                                inspect_workbook, parse_kinetic_workbook,
                                parse_single_time_workbook,
@@ -703,7 +704,7 @@ with guided_tab:
     )
     import_mode = st.radio(
         "Mode d'import",
-        ("Un fichier contient tous les temps", "Un fichier par temps"),
+        ("Un fichier contient tous les temps", "Un fichier par temps", "Mode mixte"),
         horizontal=True, key="guided_import_mode",
     )
     previous_mode = st.session_state.get("guided_import_mode_applied")
@@ -715,6 +716,7 @@ with guided_tab:
             st.session_state.pop(key, None)
     st.session_state["guided_import_mode_applied"] = import_mode
     per_time_mode = import_mode == "Un fichier par temps"
+    mixed_mode = import_mode == "Mode mixte"
     guided_uploads = st.file_uploader(
         "Déposer un ou plusieurs classeurs Varioskan (.xlsx ou .xlsm)", type=["xlsx", "xlsm"],
         accept_multiple_files=True, key="guided_upload"
@@ -734,6 +736,7 @@ with guided_tab:
     else:
         try:
             guided_inputs = []
+            guided_file_formats = {}
             guided_identity = []
             guided_import_progress = st.progress(0, text="Lecture des classeurs…")
             for file_index, upload in enumerate(guided_uploads):
@@ -750,19 +753,37 @@ with guided_tab:
                 # endpoint matrices must never pass through the historical
                 # parser, which requires kinetic time/reading headers.
                 if per_time_mode:
+                    file_format = "Un seul temps"
                     table = cached_single_time_workbook(payload, lum)
+                elif mixed_mode:
+                    default_format = 1 if "_t" in upload.name.lower() else 0
+                    file_format = st.selectbox(
+                        f"Contenu — {upload.name}",
+                        ("Tous les temps", "Un seul temps"), index=default_format,
+                        key=f"guided_format_{file_index}_{upload.name}",
+                    )
+                    if file_format == "Un seul temps":
+                        table = cached_single_time_workbook(payload, lum)
+                    else:
+                        table = cached_kinetic_workbook(payload, lum)
                 else:
+                    file_format = "Tous les temps"
                     table = cached_kinetic_workbook(payload, lum)
                 guided_inputs.append((upload.name, table))
-                guided_identity.append((upload.name, hash(payload), lum))
+                guided_file_formats[upload.name] = file_format
+                guided_identity.append((upload.name, hash(payload), lum, file_format))
                 guided_import_progress.progress(
                     int((file_index + 1) / len(guided_uploads) * 90),
                     text=f"Classeur {file_index + 1}/{len(guided_uploads)} lu",
                 )
             raw_identity = (import_mode, tuple(guided_identity))
-            if per_time_mode:
+            endpoint_inputs = [item for item in guided_inputs
+                               if guided_file_formats[item[0]] == "Un seul temps"]
+            kinetic_inputs = [item for item in guided_inputs
+                              if guided_file_formats[item[0]] == "Tous les temps"]
+            if per_time_mode or mixed_mode:
                 time_groups, missing_points = organize_time_files(
-                    name for name, _ in guided_inputs
+                    name for name, _ in endpoint_inputs
                 )
                 indices = sorted({index for files in time_groups.values() for index, _ in files})
                 if st.session_state.get("guided_time_mapping_identity") != raw_identity:
@@ -813,7 +834,10 @@ with guided_tab:
                         st.warning("Points temporels absents : " + ", ".join(
                             f"t{index}" for index in missing_points[experiment]
                         ))
-                guided_data = combine_time_point_tables(guided_inputs, mapping)
+                if mixed_mode:
+                    guided_data = combine_mixed_tables(kinetic_inputs, endpoint_inputs, mapping)
+                else:
+                    guided_data = combine_time_point_tables(endpoint_inputs, mapping)
             else:
                 guided_data = combine_kinetic_tables(guided_inputs)
             guided_import_progress.progress(100, text="Chargement terminé")
@@ -822,7 +846,7 @@ with guided_tab:
             st.error(f"Import impossible : {error}")
         else:
             time_identity = ()
-            if per_time_mode:
+            if per_time_mode or mixed_mode:
                 time_identity = tuple(
                     st.session_state["guided_time_mapping"].itertuples(index=False, name=None)
                 )
