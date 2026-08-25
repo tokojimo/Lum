@@ -1074,6 +1074,28 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     if width_scale <= 0 or height_scale <= 0:
         raise ValueError("Figure width and height scales must be positive.")
     figures = []
+    endpoint_metrics = {
+        "endpoint_od": ("DO_corr", "do_point_unique", r"OD$_{600}$ — single time point"),
+        "endpoint_lum": ("Lum_corr", "luminescence_point_unique",
+                         "Luminescence — single time point"),
+        "endpoint_norm": ("Lum_norm", "luminescence_normalisee_point_unique",
+                          r"Normalized luminescence (RLU/OD$_{600}$) — single time point"),
+    }
+    for family, (metric, suffix, figure_label) in endpoint_metrics.items():
+        values = (pd.to_numeric(data[metric], errors="coerce")
+                  if metric in data else pd.Series(dtype=float))
+        if (family not in families
+                or not values.replace([np.inf, -np.inf], np.nan).notna().any()):
+            continue
+        figures.append((suffix, plot_metric_points(
+            data, metric=metric, y_scale=metric_scale, title=figure_label,
+            compare_media=True, directional_comparisons=directional_comparisons,
+            statistical_transform=statistical_transform, alternative=alternative,
+            significant_only=significant_only,
+            show_technical_replicates=show_technical_replicates,
+            medium_order=medium_order, reporter_order=reporter_order,
+            diagnostic_run_id=diagnostic_run_id,
+        )))
     choices = (("growth", "DO_corr", "croissance", "linear", "Growth"),
                ("corrected", "Lum_corr", "luminescence_corrigee", lum_scale,
                 "Luminescence"),

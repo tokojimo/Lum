@@ -1184,6 +1184,23 @@ def test_metric_gallery_uses_boxplots_and_includes_peak_time():
         plt.close(figure)
 
 
+def test_single_time_point_gallery_builds_endpoint_boxplots():
+    data = _publication_table().query("temps_h == 2").copy()
+
+    figures = build_publication_figures(
+        data, families=("endpoint_od", "endpoint_lum", "endpoint_norm"),
+    )
+
+    assert [name for name, _ in figures] == [
+        "do_point_unique",
+        "luminescence_point_unique",
+        "luminescence_normalisee_point_unique",
+    ]
+    assert all(figure.axes[0].patches for _, figure in figures)
+    for _, figure in figures:
+        plt.close(figure)
+
+
 def test_fold_change_metrics_use_matched_p0_biological_mean_per_medium():
     metrics = pd.DataFrame([
         {"souche": strain, "Groupe": f"Experiment {experiment} | {medium}",

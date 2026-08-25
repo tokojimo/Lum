@@ -379,7 +379,9 @@ def render_guided_results(complete, base: str) -> None:
             st.info("Sélectionnez au moins une souche à afficher.")
             return
         figure_data = filter_result_strains(normalized_data, displayed_strains)
-        guided_family_labels = {
+        observed_times = pd.to_numeric(figure_data["temps_h"], errors="coerce").dropna().unique()
+        single_time_point = len(observed_times) == 1
+        kinetic_family_labels = {
             "Croissance corrigée": "growth",
             "Luminescence non normalisée": "corrected",
             "Double axe DO + luminescence non normalisée": "mixed",
@@ -390,14 +392,30 @@ def render_guided_results(complete, base: str) -> None:
             "Rapport AUC luminescence / AUC DO — fold change vs P0 par milieu": "auc_fc",
             "Temps de doublement": "doubling",
         }
+        endpoint_family_labels = {
+            "DO corrigée — boîte à moustaches": "endpoint_od",
+            "Luminescence corrigée — boîte à moustaches": "endpoint_lum",
+            "Luminescence normalisée — boîte à moustaches": "endpoint_norm",
+        }
+        guided_family_labels = endpoint_family_labels if single_time_point else kinetic_family_labels
+        if single_time_point:
+            st.info(
+                f"Un seul temps expérimental ({observed_times[0]:g} h) est présent. "
+                "Les AUC, courbes de croissance, pics et temps de doublement ne sont pas "
+                "calculables ; seules les distributions de DO, luminescence et luminescence "
+                "normalisée sont proposées."
+            )
+        default_figure_labels = (list(endpoint_family_labels) if single_time_point else [
+            "Croissance corrigée",
+            "Luminescence non normalisée",
+            "Double axe DO + luminescence non normalisée",
+            "Rapport AUC luminescence / AUC DO",
+        ])
         guided_figure_labels = st.multiselect(
             "Figures finales", list(guided_family_labels),
-            default=[
-                "Croissance corrigée",
-                "Luminescence non normalisée",
-                "Double axe DO + luminescence non normalisée",
-                "Rapport AUC luminescence / AUC DO",
-            ], key="guided_figure_families",
+            default=default_figure_labels,
+            key=("guided_endpoint_figure_families" if single_time_point
+                 else "guided_kinetic_figure_families"),
         )
         st.markdown("#### Affichage")
         guided_options = st.columns(4)
