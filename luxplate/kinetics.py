@@ -28,8 +28,9 @@ SERIES_METRIC_COLUMNS = (*IDENTITY_COLUMNS, "n_points_total", "n_points_jointly_
     "auc_window_duration_h", "n_auc_points", "od_max",
     "od_max_time_h", "od_auc", "max_growth_rate_per_h", "growth_rate_r_squared",
     "max_growth_rate_start_h", "max_growth_rate_end_h", "doubling_time_h",
-    "growth_rate_publishability_reason", "n_lum_norm_points", "lum_norm_peak",
-    "lum_norm_peak_time_h", "lum_norm_auc", "lum_corr_peak", "lum_corr_peak_time_h",
+    "growth_rate_publishability_reason", "n_lum_norm_points", "n_lum_norm_auc_points", "lum_norm_peak",
+    "lum_norm_peak_time_h", "lum_norm_auc", "lum_norm_auc_reason",
+    "lum_norm_auc_do_cutoff", "lum_corr_peak", "lum_corr_peak_time_h",
     "lum_corr_auc")
 REJECTED_SERIES_COLUMNS = (*IDENTITY_COLUMNS, "reason", "n_points_total")
 WARNING_COLUMNS = (*IDENTITY_COLUMNS, "code", "message")
@@ -163,14 +164,14 @@ def calculate_growth_metrics(series: pd.DataFrame, growth_window_points: int = 3
 
 def calculate_luminescence_metrics(
     series: pd.DataFrame, window_start_h: float | None = None, window_end_h: float | None = None,
-) -> dict[str, float | int]:
-    """Calculate luminescence metrics and the ratio of fixed-window AUCs.
+    lum_norm_auc_do_cutoff: float | None = None,
+) -> dict[str, float | int | str]:
+    """Calculate luminescence metrics, optionally ending normalized AUC at an OD.
 
-    ``lum_norm_auc`` is retained as the public column name, but represents
-    ``AUC(Lum_corr) / AUC(DO_corr - min(DO_corr))``. The OD minimum is taken
-    within the common acquisition window. Both areas use the same jointly
-    finite observations and window. Pointwise ``Lum_norm`` is used only for
-    peak metrics and plotting.
+    The cutoff only affects ``integral(Lum_norm, time)``.  At the first upward
+    crossing, one linearly interpolated boundary point is appended; the rest of
+    the curve is never resampled.  ``None`` preserves the complete common time
+    window.
     """
     peak, peak_time = calculate_peak(series["temps_h"], series["Lum_norm"])
     finite_norm = np.isfinite(pd.to_numeric(series["Lum_norm"], errors="coerce"))
@@ -189,13 +190,51 @@ def calculate_luminescence_metrics(
     # than allowing those observations to subtract from the integrated biomass.
     od_auc = calculate_baseline_shifted_auc(auc_time, auc_od)
     lum_auc = calculate_auc(auc_time, auc_lum)
-    ratio = lum_auc / od_auc if np.isfinite(od_auc) and od_auc > 0 else np.nan
+    norm = pd.to_numeric(series["Lum_norm"], errors="coerce").to_numpy(float)
+    norm_common = np.isfinite(time) & np.isfinite(od) & np.isfinite(norm) & in_window
+    norm_time, norm_od, norm_values = (array[norm_common] for array in (time, od, norm))
+    order = np.argsort(norm_time, kind="stable")
+    norm_time, norm_od, norm_values = norm_time[order], norm_od[order], norm_values[order]
+    auc_reason = ""
+    if lum_norm_auc_do_cutoff is not None:
+        cutoff = float(lum_norm_auc_do_cutoff)
+        crossings = np.flatnonzero(norm_od >= cutoff)
+        crossing = int(crossings[0]) if len(crossings) else -1
+        if crossing < 0:
+            auc_reason = "do_cutoff_not_reached"
+            norm_time = norm_values = np.array([], dtype=float)
+        elif crossing == 0:
+            # There is no observed below-threshold segment on which to
+            # interpolate a crossing or integrate a meaningful interval.
+            auc_reason = "do_cutoff_not_reached"
+            norm_time = norm_values = np.array([], dtype=float)
+        else:
+            t0, t1 = norm_time[crossing - 1], norm_time[crossing]
+            od0, od1 = norm_od[crossing - 1], norm_od[crossing]
+            y0, y1 = norm_values[crossing - 1], norm_values[crossing]
+            if np.isclose(od1, cutoff):
+                boundary_t, boundary_y = t1, y1
+            elif od1 > od0:
+                fraction = (cutoff - od0) / (od1 - od0)
+                boundary_t = t0 + fraction * (t1 - t0)
+                boundary_y = y0 + fraction * (y1 - y0)
+            else:
+                auc_reason = "do_cutoff_not_reached"
+                norm_time = norm_values = np.array([], dtype=float)
+                boundary_t = boundary_y = np.nan
+            if not auc_reason:
+                norm_time = np.append(norm_time[:crossing], boundary_t)
+                norm_values = np.append(norm_values[:crossing], boundary_y)
+    norm_auc = calculate_auc(norm_time, norm_values) if not auc_reason else np.nan
     covers_window = bool(
         len(auc_time) >= 2 and np.isclose(auc_time, start).any() and np.isclose(auc_time, end).any()
     )
-    result = {"n_lum_norm_points": int(finite_norm.sum()), "n_auc_points": int(common.sum()),
+    result = {"n_lum_norm_points": int(finite_norm.sum()),
+              "n_lum_norm_auc_points": int(len(norm_time)), "n_auc_points": int(common.sum()),
               "auc_covers_common_window": covers_window, "lum_norm_peak": peak,
-              "lum_norm_peak_time_h": peak_time, "lum_norm_auc": ratio,
+              "lum_norm_peak_time_h": peak_time, "lum_norm_auc": norm_auc,
+              "lum_norm_auc_reason": auc_reason,
+              "lum_norm_auc_do_cutoff": lum_norm_auc_do_cutoff,
               "lum_corr_auc": lum_auc, "fixed_window_od_auc": od_auc}
     if "Lum_corr" in series:
         corr_peak, corr_time = calculate_peak(series["temps_h"], series["Lum_corr"])
@@ -267,7 +306,8 @@ def _common_auc_windows(
 
 def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
     minimum_auc_points: int = 2, growth_window_min_duration_h: float = 0.0,
-    growth_rate_min_r_squared: float = 0.0) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    growth_rate_min_r_squared: float = 0.0,
+    lum_norm_auc_do_cutoff: float | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if not isinstance(minimum_auc_points, (int, np.integer)) or minimum_auc_points < 2:
         raise ValueError("minimum_auc_points doit être un entier supérieur ou égal à 2.")
     metrics, rejected, warnings = [], [], []
@@ -281,7 +321,9 @@ def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
                 "message": "Temps dupliqué : les métriques globales sont conservées, aucune fenêtre ne traverse le doublon."})
         growth = calculate_growth_metrics(series, growth_window_points, growth_window_min_duration_h,
                                           growth_rate_min_r_squared)
-        lum = calculate_luminescence_metrics(series, window_start, window_end)
+        lum = calculate_luminescence_metrics(
+            series, window_start, window_end, lum_norm_auc_do_cutoff
+        )
         reasons = []
         if growth["n_growth_points"] < minimum_auc_points:
             reasons.append("insufficient_growth_points")
@@ -298,6 +340,10 @@ def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
         if reason:
             warnings.append({**identity, "code": reason,
                              "message": "Le taux de croissance et/ou le temps de doublement n'est pas publiable."})
+        if lum["lum_norm_auc_reason"]:
+            warnings.append({**identity, "code": lum["lum_norm_auc_reason"],
+                             "message": ("La série n'atteint pas la DO maximale validée et "
+                                         "est exclue uniquement de l'AUC normalisée.")})
         finite_any = np.isfinite(series[["DO_corr", "Lum_norm"]].to_numpy(dtype=float)).all(axis=1)
         used_times = series.loc[finite_any, "temps_h"]
         growth["od_auc"] = lum["fixed_window_od_auc"]
@@ -336,15 +382,21 @@ def summarize_technical_replicates(series_metrics: pd.DataFrame) -> pd.DataFrame
 
 def run_kinetics(data: pd.DataFrame, growth_window_points: int = 3, minimum_auc_points: int = 2,
                  growth_window_min_duration_h: float = 0.0,
-                 growth_rate_min_r_squared: float = 0.0) -> KineticsResult:
+                 growth_rate_min_r_squared: float = 0.0,
+                 lum_norm_auc_do_cutoff: float | None = None) -> KineticsResult:
     """Run the complete, non-mutating kinetic-parameter workflow."""
     if not np.isfinite(growth_window_min_duration_h) or growth_window_min_duration_h < 0:
         raise ValueError("growth_window_min_duration_h doit être positif ou nul.")
     if not np.isfinite(growth_rate_min_r_squared) or not 0 <= growth_rate_min_r_squared <= 1:
         raise ValueError("growth_rate_min_r_squared doit être compris entre 0 et 1.")
+    if lum_norm_auc_do_cutoff is not None and (
+        not np.isfinite(lum_norm_auc_do_cutoff) or lum_norm_auc_do_cutoff < 0
+    ):
+        raise ValueError("lum_norm_auc_do_cutoff doit être positif, nul ou None.")
     prepared = validate_kinetics_inputs(data, growth_window_points)
     metrics, rejected, warnings = extract_series_kinetics(prepared, growth_window_points,
-        minimum_auc_points, growth_window_min_duration_h, growth_rate_min_r_squared)
+        minimum_auc_points, growth_window_min_duration_h, growth_rate_min_r_squared,
+        lum_norm_auc_do_cutoff)
     strain_summary = summarize_technical_replicates(metrics)
     summary = _table([
         ("series_total", len(metrics) + len(rejected)), ("series_analyzed", len(metrics)),
