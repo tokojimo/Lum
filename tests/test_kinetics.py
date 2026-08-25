@@ -171,15 +171,18 @@ def test_auc_spans_single_and_successive_missing_observations():
     assert calculate_auc([0, 1, 2, 3, 4], [0, 1, np.nan, np.nan, 4]) == pytest.approx(8.0)
 
 
-def test_normalized_auc_integrates_pointwise_normalized_luminescence_on_common_window():
+def test_normalized_auc_is_ratio_of_corrected_luminescence_and_shifted_od_aucs():
     data = kinetic_table()
     result = run_kinetics(data)
     row = result.series_metrics.iloc[0]
     expected_lum_auc = calculate_auc(data["temps_h"], data["Lum_corr"])
-    expected_norm_auc = calculate_auc(data["temps_h"], data["Lum_norm"])
+    pointwise_auc = calculate_auc(data["temps_h"], data["Lum_norm"])
     expected_od_auc = calculate_baseline_shifted_auc(data["temps_h"], data["DO_corr"])
+    expected_norm_auc = expected_lum_auc / expected_od_auc
     assert row["lum_corr_auc"] == pytest.approx(expected_lum_auc)
+    assert row["od_auc"] == pytest.approx(expected_od_auc)
     assert row["lum_norm_auc"] == pytest.approx(expected_norm_auc)
+    assert row["lum_norm_auc"] != pytest.approx(pointwise_auc)
     assert row["n_auc_points"] == len(data)
 
 
@@ -214,13 +217,13 @@ def test_all_experiments_use_the_complete_span_of_the_shortest_experiment():
     result = run_kinetics(pd.concat([long, short], ignore_index=True))
     rows = result.series_metrics.set_index("experience_id")
 
-    expected_long_norm = calculate_auc(long.loc[long["temps_h"] <= 2, "temps_h"],
-                                       long.loc[long["temps_h"] <= 2, "Lum_norm"])
+    expected_long_lum = calculate_auc(long.loc[long["temps_h"] <= 2, "temps_h"],
+                                      long.loc[long["temps_h"] <= 2, "Lum_corr"])
     expected_long_od = calculate_baseline_shifted_auc(
         long.loc[long["temps_h"] <= 2, "temps_h"],
         long.loc[long["temps_h"] <= 2, "DO_corr"],
     )
-    assert rows.loc["long", "lum_norm_auc"] == pytest.approx(expected_long_norm)
+    assert rows.loc["long", "lum_norm_auc"] == pytest.approx(expected_long_lum / expected_long_od)
     assert rows.loc["long", "od_auc"] == pytest.approx(expected_long_od)
     assert rows.loc["long", "auc_window_duration_h"] == pytest.approx(2)
     assert rows.loc["short", "auc_window_duration_h"] == pytest.approx(2)
@@ -279,21 +282,30 @@ def test_none_cutoff_matches_full_normalized_auc_exactly():
     assert explicit_full_range["lum_norm_auc"] == without_argument["lum_norm_auc"]
 
 
-def test_od_cutoff_uses_first_crossing_and_interpolates_boundary():
-    data = kinetic_table().iloc[:4].copy()
-    data["temps_h"] = [4.0, 5.0, 6.0, 7.0]
-    data["DO_corr"] = [0.12, 0.18, 0.22, 0.30]
-    data["Lum_norm"] = [10.0, 20.0, 40.0, 1000.0]
+def test_od_cutoff_recalculates_both_aucs_on_one_interpolated_window():
+    data = kinetic_table().iloc[:3].copy()
+    data["temps_h"] = [0.0, 1.0, 2.0]
+    data["DO_corr"] = [0.05, 0.15, 0.25]
+    data["Lum_corr"] = [10.0, 20.0, 40.0]
+    # Deliberately unrelated: pointwise normalized values remain peak inputs only.
+    data["Lum_norm"] = [100.0, 80.0, 60.0]
 
+    full = run_kinetics(data, growth_window_points=2).series_metrics.iloc[0]
     row = run_kinetics(data, growth_window_points=2,
                        lum_norm_auc_do_cutoff=0.20).series_metrics.iloc[0]
 
-    # Boundary is (5.5 h, 30); the very large point after the crossing is absent.
-    expected = calculate_auc([4.0, 5.0, 5.5], [10.0, 20.0, 30.0])
-    assert row["lum_norm_auc"] == pytest.approx(expected)
+    shared_time = [0.0, 1.0, 1.5]
+    expected_lum_auc = calculate_auc(shared_time, [10.0, 20.0, 30.0])
+    expected_od_auc = calculate_baseline_shifted_auc(shared_time, [0.05, 0.15, 0.20])
+    assert row["auc_window_end_h"] == pytest.approx(1.5)
+    assert row["lum_corr_auc"] == pytest.approx(expected_lum_auc)
+    assert row["od_auc"] == pytest.approx(expected_od_auc)
+    assert row["lum_norm_auc"] == pytest.approx(expected_lum_auc / expected_od_auc)
+    assert row["lum_corr_auc"] != pytest.approx(full["lum_corr_auc"])
+    assert row["od_auc"] != pytest.approx(full["od_auc"])
+    assert row["lum_norm_peak"] == pytest.approx(100.0)
+    assert row["lum_norm_peak_time_h"] == pytest.approx(0.0)
     assert row["lum_norm_auc_reason"] == ""
-    assert row["lum_norm_auc_do_cutoff"] == pytest.approx(0.20)
-
 
 def test_series_not_reaching_od_cutoff_is_excluded_only_from_normalized_auc():
     data = kinetic_table()

@@ -118,16 +118,22 @@ present row into zero (or into `-background`).
 Kinetic series use every available identity component among `experience_id`,
 `souche`, `Groupe`, `sample_header`, `puits`, and `replicat`, so conditions,
 wells, biological replicates, and experiments are never silently
-merged. The primary normalized-luminescence metric is
-`AUC(Lum_corr) / AUC(DO_corr shifted)`: before trapezoidal integration, the
+merged. Instantaneous `Lum_norm(t) = Lum_corr(t) / DO_corr(t)` is used for the
+normalized curves, peaks, and peak times only. The integrated metric
+`lum_norm_auc` is instead `AUC(Lum_corr) / AUC(DO_corr shifted)`: before
+trapezoidal integration, the
 lowest finite corrected OD in the common window is translated to zero and the
 same offset is applied to every OD in that curve. Both areas use jointly finite points
 over an equal-duration window for every experiment. That duration is selected
 automatically as the complete acquisition span of the shortest experiment, then
-applied from each experiment's first time point. A well
+applied from each experiment's first time point. When an OD cutoff is selected,
+the first upward crossing is located by linear interpolation; a single boundary
+point is interpolated for both `Lum_corr` and `DO_corr`, and both AUCs are
+recalculated on that exact shared time window. A well
 that does not cover both window endpoints, has fewer than the configured number
-of points, or still has a non-positive shifted OD AUC is rejected automatically. Pointwise
-`Lum_norm = Lum_corr / DO_corr` remains available for curves and peak metrics.
+of points, or still has a non-positive shifted OD AUC is rejected automatically.
+A series that never reaches an active cutoff is not extrapolated and reports
+`do_cutoff_not_reached`.
 AUC uses every finite point and therefore spans temporal gaps. Duplicate
 times are traceable warnings: they interrupt growth windows but do not discard
 otherwise computable peak and AUC metrics. Maximum growth is the greatest slope
