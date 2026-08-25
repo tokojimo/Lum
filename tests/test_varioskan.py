@@ -8,6 +8,7 @@ from openpyxl import Workbook, load_workbook
 from luxplate.varioskan import (
     assign_biological_pair_ids,
     combine_kinetic_tables,
+    combine_mixed_tables,
     combine_time_point_tables,
     inspect_workbook,
     normalize_strain_name,
@@ -79,6 +80,28 @@ def test_biological_pair_suggestions_use_names_not_file_order():
     assert [suggest_biological_pair_id(name) for name in names] == [
         "bio1", "bio2", "bio3", "bio1", "bio2", "bio3",
     ]
+
+
+def test_mixed_import_combines_both_formats_without_internal_id_collisions():
+    kinetic = parse_kinetic_workbook(synthetic_workbook())
+    endpoint = parse_single_time_workbook(single_time_workbook())
+
+    result = combine_mixed_tables(
+        [("complete.xlsx", kinetic)], [("series_t0.xlsx", endpoint)], {0: 2.5}
+    )
+
+    assert set(result["import_format"]) == {"kinetic", "endpoint"}
+    assert set(result["experience"]) == {"complete", "series"}
+    assert result.groupby("import_format")["Groupe"].apply(
+        lambda values: values.str.startswith(values.name + "|").all()
+    ).all()
+    assert result.query("import_format == 'endpoint'")["temps_h"].eq(2.5).all()
+
+
+def test_mixed_import_requires_both_file_formats():
+    kinetic = parse_kinetic_workbook(synthetic_workbook())
+    with pytest.raises(ValueError, match="au moins un fichier"):
+        combine_mixed_tables([("complete.xlsx", kinetic)], [], {})
 
 
 def test_validated_biological_pair_mapping_is_attached_to_every_file_row():

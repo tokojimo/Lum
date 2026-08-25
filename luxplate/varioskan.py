@@ -462,6 +462,38 @@ def combine_kinetic_tables(
     return pd.concat(combined, ignore_index=True, sort=False)
 
 
+def combine_mixed_tables(
+    kinetic_tables: Iterable[tuple[str, pd.DataFrame]],
+    time_point_tables: Iterable[tuple[str, pd.DataFrame]],
+    time_mapping: dict[int, float],
+) -> pd.DataFrame:
+    """Combine kinetic workbooks and endpoint time series in one import.
+
+    Each family first follows its normal validation and normalization path.
+    A family prefix is then added to internal identifiers so the independent
+    namespaces created by both combiners cannot collide.
+    """
+    kinetic_items = list(kinetic_tables)
+    endpoint_items = list(time_point_tables)
+    if not kinetic_items or not endpoint_items:
+        raise ValueError(
+            "Le mode mixte nécessite au moins un fichier contenant tous les temps "
+            "et un fichier correspondant à un seul temps."
+        )
+
+    parts = []
+    for prefix, frame in (
+        ("kinetic", combine_kinetic_tables(kinetic_items)),
+        ("endpoint", combine_time_point_tables(endpoint_items, time_mapping)),
+    ):
+        normalized = frame.copy(deep=True)
+        for column in ("Groupe", "sample_header"):
+            normalized[column] = prefix + "|" + normalized[column].fillna("").astype(str)
+        normalized["import_format"] = prefix
+        parts.append(normalized)
+    return pd.concat(parts, ignore_index=True, sort=False)
+
+
 TIME_FILE_RE = re.compile(r"_t(?P<index>\d+)(?!\d)", re.IGNORECASE)
 
 
