@@ -10,6 +10,8 @@ import streamlit as st
 from streamlit_sortables import sort_items
 
 from luxplate.blanks import run_blank_correction
+from luxplate.auc_controls import (DRAFT_KEY, VALIDATED_KEY, auc_do_slider_bounds,
+                                   initialize_auc_do_state, validate_auc_do_draft)
 from luxplate.crosstalk import correct_plate_crosstalk
 from luxplate.export import figure_bytes, package_figures
 from luxplate.display_order import reconcile_display_order
@@ -17,6 +19,7 @@ from luxplate.figure_lifecycle import (filter_result_strains,
                                        invalidate_guided_analysis_state,
                                        validate_figure_render)
 from luxplate.media import logical_media
+from luxplate.kinetics import run_kinetics
 from luxplate.plotting import (build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
                                build_publication_figures, collect_publication_statistics,
@@ -125,6 +128,7 @@ def build_current_publication_figures(
     height_scale: float,
     medium_order: tuple[str, ...],
     reporter_order: tuple[str, ...],
+    lum_norm_auc_do_cutoff: float | None,
 ):
     """Create fresh publication figures for the current Streamlit render.
 
@@ -147,6 +151,7 @@ def build_current_publication_figures(
         statistical_transform=statistical_transform, alternative=alternative,
         width_scale=width_scale, height_scale=height_scale,
         medium_order=medium_order, reporter_order=reporter_order,
+        lum_norm_auc_do_cutoff=lum_norm_auc_do_cutoff,
         diagnostic_run_id=st.session_state.get("_debug_full_run_id", "unknown"),
     )
     _figure_debug("PUBLICATION_BUILDER_EXIT", figures_count=len(figures))
@@ -154,6 +159,40 @@ def build_current_publication_figures(
         _figure_debug("PUBLICATION_BUILDER_EXIT_FIGURE", figure_name=name,
                       figure_id=id(figure), axes_count=len(figure.axes))
     return figures
+
+
+@st.fragment
+def select_auc_lum_norm_do_cutoff(data: pd.DataFrame) -> None:
+    """Edit the OD cutoff without invalidating figures until validation."""
+    lower, upper = auc_do_slider_bounds(data)
+    initialize_auc_do_state(st.session_state, lower, upper)
+    st.markdown("#### AUC Luminescence Normalisée")
+    st.markdown("**Limiter l'AUC à une DO maximale**")
+    st.slider(
+        "DO maximale utilisée pour l'AUC", min_value=lower, max_value=upper,
+        step=0.01, key=DRAFT_KEY, format="%.2f",
+        help=("La position complètement à droite signifie « toute la cinétique ». "
+              "Le déplacement ne recalcule rien avant validation."),
+    )
+    draft = float(st.session_state[DRAFT_KEY])
+    st.caption("Valeur sélectionnée : " + (
+        "Toute la cinétique" if abs(draft - upper) < 1e-9 else f"{draft:.2f} OD600"
+    ))
+    if st.button("Valider la DO maximale", type="primary", key="validate_auc_lum_norm_do_max"):
+        validate_auc_do_draft(st.session_state, upper)
+        st.rerun()
+    validated = st.session_state[VALIDATED_KEY]
+    if validated is None:
+        st.success("AUC calculée sur toute la fenêtre actuellement valide.")
+    else:
+        st.success(f"AUC calculée jusqu'à DO600 = {float(validated):.2f}.")
+        result = run_kinetics(data, lum_norm_auc_do_cutoff=float(validated))
+        excluded = int(result.warnings["code"].eq("do_cutoff_not_reached").sum())
+        if excluded:
+            st.warning(
+                f"{excluded} séries biologiques/techniques n'atteignent pas DO = "
+                f"{float(validated):.2f} et ne sont pas utilisées pour cette AUC."
+            )
 
 
 @st.fragment
@@ -388,8 +427,8 @@ def render_guided_results(complete, base: str) -> None:
             "Pic normalisé": "peak",
             "Pic normalisé — fold change vs P0 par milieu": "peak_fc",
             "Temps du pic normalisé": "peak_time",
-            "Rapport AUC luminescence / AUC DO": "auc",
-            "Rapport AUC luminescence / AUC DO — fold change vs P0 par milieu": "auc_fc",
+            "AUC Luminescence Normalisée": "auc",
+            "AUC Luminescence Normalisée — fold change vs P0 par milieu": "auc_fc",
             "Temps de doublement": "doubling",
         }
         endpoint_family_labels = {
@@ -409,7 +448,7 @@ def render_guided_results(complete, base: str) -> None:
             "Croissance corrigée",
             "Luminescence non normalisée",
             "Double axe DO + luminescence non normalisée",
-            "Rapport AUC luminescence / AUC DO",
+            "AUC Luminescence Normalisée",
         ])
         guided_figure_labels = st.multiselect(
             "Figures finales", list(guided_family_labels),
@@ -499,9 +538,15 @@ def render_guided_results(complete, base: str) -> None:
         if not guided_figure_labels:
             st.info("Sélectionnez au moins une figure finale.")
         else:
+            selected_families = tuple(
+                guided_family_labels[label] for label in guided_figure_labels
+            )
+            if {"auc", "auc_fc"}.intersection(selected_families):
+                select_auc_lum_norm_do_cutoff(figure_data)
+            auc_do_cutoff = st.session_state.get(VALIDATED_KEY)
             figure_parameters = dict(
                 title="Analyse complète",
-                families=tuple(guided_family_labels[label] for label in guided_figure_labels),
+                families=selected_families,
                 panel_by="Groupe" if guided_panel_label.endswith("milieu") else "souche",
                 lum_scale="log" if guided_lum_label == "Logarithmique (base 10)" else "linear",
                 metric_scale="log" if guided_metric_label == "Logarithmique (base 10)" else "linear",
@@ -512,6 +557,7 @@ def render_guided_results(complete, base: str) -> None:
                 height_scale=guided_height_percent / 100,
                 medium_order=guided_medium_order,
                 reporter_order=guided_reporter_order,
+                lum_norm_auc_do_cutoff=auc_do_cutoff,
             )
             _figure_debug(
                 "FIGURE_BUILD_REQUEST", context="full_render",
