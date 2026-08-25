@@ -65,6 +65,89 @@ def test_invalid_od_and_short_series_are_never_divided():
     assert short_result.series_validation.iloc[0]["reason"] == "series_too_short"
 
 
+def _endpoint_table(rows):
+    return pd.DataFrame([
+        {"experience_id": experience, "temps_h": time, "souche": strain,
+         "sample_header": header, "replicat": replicate, "type": kind,
+         "DO_corr": od, "Lum_corr": lum, "Groupe": "G"}
+        for experience, time, strain, header, replicate, kind, od, lum in rows
+    ])
+
+
+def test_single_time_endpoint_normalizes_one_valid_measurement():
+    data = _endpoint_table([("E1", 4, "S1", "S1_1", 1, "souche", .20, 10_000)])
+
+    row = run_normalization(data, minimum_od=.05, consecutive_points=3).normalized_data.iloc[0]
+
+    assert row["Lum_norm"] == pytest.approx(50_000)
+    assert bool(row["normalization_ok"])
+    assert row["normalization_reason"] == ""
+
+
+def test_single_time_endpoint_normalizes_all_strains_and_replicates():
+    data = _endpoint_table([
+        ("E1", 4, strain, f"{strain}_{replicate}", replicate, "souche", od, lum)
+        for strain, od, lum in (("S1", .2, 10_000), ("S2", .4, 12_000))
+        for replicate in (1, 2)
+    ])
+
+    normalized = run_normalization(data, consecutive_points=3).normalized_data
+
+    np.testing.assert_allclose(normalized["Lum_norm"],
+                               normalized["Lum_corr"] / normalized["DO_corr"])
+    assert normalized["normalization_ok"].all()
+
+
+def test_single_time_endpoint_respects_effective_threshold():
+    data = _endpoint_table([
+        ("E1", 4, "blank", "B1", 1, "blanc", .10, 0),
+        ("E1", 4, "S1", "S1_1", 1, "souche", .10, 10_000),
+    ])
+
+    row = run_normalization(data, blank_sd_multiplier=0, minimum_od=.05).normalized_data.query(
+        "type == 'souche'"
+    ).iloc[0]
+
+    assert np.isnan(row["Lum_norm"])
+    assert not bool(row["normalization_ok"])
+    assert row["normalization_reason"] == "od_not_above_threshold"
+
+
+@pytest.mark.parametrize(("od", "reason"), [(0, "non_positive_od"), (-.1, "non_positive_od")])
+def test_single_time_endpoint_never_divides_by_non_positive_od(od, reason):
+    data = _endpoint_table([("E1", 4, "S1", "S1_1", 1, "souche", od, 10_000)])
+
+    row = run_normalization(data, minimum_od=0).normalized_data.iloc[0]
+
+    assert np.isnan(row["Lum_norm"])
+    assert not bool(row["normalization_ok"])
+    assert row["normalization_reason"] == reason
+
+
+def test_independent_single_time_experiments_allow_small_clock_differences():
+    data = _endpoint_table([
+        ("E1", 4.0, "S1", "E1_S1", 1, "souche", .2, 10_000),
+        ("E2", 4.05, "S1", "E2_S1", 1, "souche", .25, 10_000),
+    ])
+
+    normalized = run_normalization(data, consecutive_points=3).normalized_data
+
+    assert normalized["normalization_ok"].all()
+
+
+def test_multi_time_kinetic_still_requires_consecutive_points():
+    data = _endpoint_table([
+        ("E1", time, "S1", "S1_1", 1, "souche", od, 1_000)
+        for time, od in ((0, .2), (1, .01), (2, .2))
+    ])
+
+    result = run_normalization(data, minimum_od=.05, consecutive_points=3)
+
+    assert result.normalized_data["Lum_norm"].isna().all()
+    assert not result.series_validation.iloc[0]["series_valid"]
+    assert result.series_validation.iloc[0]["reason"] == "no_consecutive_points_above_threshold"
+
+
 def test_no_blank_falls_back_to_minimum_and_warns():
     data = corrected_table().query("type == 'souche'")
     result = run_normalization(data)

@@ -18,6 +18,11 @@ VALIDATION_COLUMNS = (
     "normalization_start_time_h", "series_valid", "reason",
 )
 
+# Acquisition times from independent plates can differ by a few seconds even
+# when they represent the same planned endpoint.  This is the same tolerance
+# used when plotting aligned biological summaries.
+SINGLE_TIME_TOLERANCE_H = 1 / 60
+
 
 @dataclass(frozen=True)
 class NormalizationResult:
@@ -115,9 +120,29 @@ def _series_columns(data: pd.DataFrame) -> list[str]:
     return columns
 
 
+def _is_single_time_endpoint(data: pd.DataFrame,
+                             tolerance_h: float = SINGLE_TIME_TOLERANCE_H) -> bool:
+    """Return whether every experiment contains one relevant acquisition time.
+
+    Experiments are assessed independently: endpoint plates from separate runs
+    need not have numerically identical elapsed times.  Within a run, reader
+    timestamps separated only by the established alignment tolerance count as
+    the same planned acquisition.
+    """
+    relevant = data.loc[data["type"].eq("souche")]
+    if relevant.empty:
+        return False
+    for _, experiment in _experience_groups(relevant):
+        times = np.sort(pd.to_numeric(experiment["temps_h"], errors="coerce").unique())
+        if len(times) > 1 and np.any(np.diff(times) > tolerance_h):
+            return False
+    return True
+
+
 def validate_series_for_normalization(
     data: pd.DataFrame, threshold_details: pd.DataFrame,
     minimum_od: float = 0.05, consecutive_points: int = 3,
+    single_time_endpoint: bool = False,
 ) -> pd.DataFrame:
     """Validate each strain/well series independently and record its start time."""
     if not np.isfinite(minimum_od) or minimum_od < 0:
@@ -133,7 +158,8 @@ def validate_series_for_normalization(
         experience = identity.get("experience_id", "")
         blank_threshold = threshold_map.get(experience, np.nan)
         effective = max(float(minimum_od), float(blank_threshold)) if pd.notna(blank_threshold) else float(minimum_od)
-        start = find_first_consecutive_valid_time(series, effective, int(consecutive_points))
+        start = (float(series["temps_h"].min()) if single_time_endpoint
+                 else find_first_consecutive_valid_time(series, effective, int(consecutive_points)))
         ods = pd.to_numeric(series["DO_corr"], errors="coerce")
         reason = "" if pd.notna(start) else (
             "series_too_short" if len(series) < consecutive_points else "no_consecutive_points_above_threshold"
@@ -152,7 +178,7 @@ def validate_series_for_normalization(
 
 def normalize_luminescence_by_od(
     data: pd.DataFrame, series_validation: pd.DataFrame, threshold_details: pd.DataFrame,
-    minimum_od: float = 0.05,
+    minimum_od: float = 0.05, single_time_endpoint: bool = False,
 ) -> pd.DataFrame:
     """Return all input rows annotated with normalization status and reason."""
     output = data.copy(deep=True)
@@ -168,11 +194,14 @@ def normalize_luminescence_by_od(
     # Assign in reverse priority so the first failing rule in the scientific
     # decision tree wins, without paying the cost of a Python loop per row.
     reasons = np.full(len(output), "", dtype=object)
-    rules = (
-        (output["DO_corr"].le(output["threshold_effective"]), "od_not_above_threshold"),
+    kinetic_rules = (() if single_time_endpoint else (
         (output["temps_h"].lt(output["normalization_start_time_h"]), "before_normalization_start"),
         (output["series_valid"].isna() | ~output["series_valid"].fillna(False).astype(bool),
          "series_not_validated"),
+    ))
+    rules = (
+        (output["DO_corr"].le(output["threshold_effective"]), "od_not_above_threshold"),
+        *kinetic_rules,
         (~np.isfinite(output["Lum_corr"]), "invalid_luminescence"),
         (output["DO_corr"].le(0), "non_positive_od"),
         (~np.isfinite(output["DO_corr"]), "invalid_od"),
@@ -200,8 +229,13 @@ def run_normalization(
     details["minimum_od"] = float(minimum_od)
     details["effective_threshold"] = details["blank_threshold"].fillna(float(minimum_od)).clip(lower=float(minimum_od))
     details["consecutive_points"] = consecutive_points
-    validation = validate_series_for_normalization(prepared, details, minimum_od, consecutive_points)
-    normalized = normalize_luminescence_by_od(prepared, validation, details, minimum_od)
+    single_time_endpoint = _is_single_time_endpoint(prepared)
+    validation = validate_series_for_normalization(
+        prepared, details, minimum_od, consecutive_points, single_time_endpoint
+    )
+    normalized = normalize_luminescence_by_od(
+        prepared, validation, details, minimum_od, single_time_endpoint
+    )
     rejected = normalized.loc[~normalized["normalization_ok"]].copy().reset_index(drop=True)
     warnings = pd.DataFrame([
         {"code": "no_valid_corrected_blanks", "experience_id": row.experience_id,

@@ -9,6 +9,7 @@ import pytest
 from matplotlib.ticker import FuncFormatter
 
 from luxplate.display_order import reconcile_display_order
+from luxplate.normalization import run_normalization
 from luxplate.plotting import (_aligned_biological_summary, _comparison_identifiers,
                                BRACKET_ENDPOINT_GAP, DEFAULT_BOXPLOT_Y_SCALE,
                                DEFAULT_CURVE_Y_SCALE, _bracket_draw_coordinates, _bracket_levels,
@@ -1185,7 +1186,8 @@ def test_metric_gallery_uses_boxplots_and_includes_peak_time():
 
 
 def test_single_time_point_gallery_builds_endpoint_boxplots():
-    data = _publication_table().query("temps_h == 2").copy()
+    endpoint = _publication_table().query("temps_h == 2").drop(columns="Lum_norm")
+    data = run_normalization(endpoint, consecutive_points=3).normalized_data
 
     figures = build_publication_figures(
         data, families=("endpoint_od", "endpoint_lum", "endpoint_norm"),
@@ -1196,6 +1198,7 @@ def test_single_time_point_gallery_builds_endpoint_boxplots():
         "luminescence_point_unique",
         "luminescence_normalisee_point_unique",
     ]
+    np.testing.assert_allclose(data["Lum_norm"], data["Lum_corr"] / data["DO_corr"])
     assert all(figure.axes[0].patches for _, figure in figures)
     for _, figure in figures:
         plt.close(figure)
