@@ -1111,6 +1111,10 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                 if family.endswith("_fc"):
                     fold_changes = metric_fold_change_vs_control(metrics, metric=metric, control="P0-lux")
                     fold_metric = f"{metric}_fold_change"
+                    if fold_metric not in fold_changes or not pd.to_numeric(
+                            fold_changes[fold_metric], errors="coerce").replace(
+                                [np.inf, -np.inf], np.nan).notna().any():
+                        continue
                     figures.append((suffix, plot_metric_points(
                         fold_changes, metric=fold_metric, y_scale=metric_scale,
                         title=figure_label, compare_media=True,
@@ -1121,6 +1125,14 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
                         medium_order=medium_order, reporter_order=reporter_order,
                         diagnostic_run_id=diagnostic_run_id)))
                 else:
+                    # Do not manufacture an empty Matplotlib canvas when the
+                    # selected dataset has no calculable kinetic metric.  Such
+                    # a canvas correctly fails ``validate_figure_render`` and
+                    # is not useful in the publication gallery.
+                    if metric not in metrics or not pd.to_numeric(
+                            metrics[metric], errors="coerce").replace(
+                                [np.inf, -np.inf], np.nan).notna().any():
+                        continue
                     scale = "linear" if family in {"doubling", "peak_time"} else metric_scale
                     figures.append((suffix, plot_metric_points(metrics, metric=metric, y_scale=scale,
                         title=figure_label, compare_media=True,
