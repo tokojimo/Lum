@@ -44,6 +44,26 @@ def test_filter_respects_selected_media_and_keeps_their_blanks():
     assert set(selected["souche"]) == {"S1", "Blanc"}
 
 
+def test_mixed_filter_selects_every_internal_group_and_its_blanks():
+    rows = []
+    groups = [
+        *(f"kinetic|exp{number}|SCFM2-KPi" for number in range(1, 4)),
+        *(f"endpoint|exp{number}|SCFM2 (Po)" for number in range(1, 4)),
+    ]
+    for group in groups:
+        for kind, strain in (("souche", "Reporter"), ("blanc", "Blanc")):
+            rows.append({"Groupe": group, "type": kind, "souche": strain})
+    data = pd.DataFrame(rows)
+
+    kinetic = filter_experiment_data(data, ["Reporter"], ["SCFM2-KPi"])
+    endpoint = filter_experiment_data(data, ["Reporter"], ["SCFM2 (Po)"])
+
+    assert kinetic["Groupe"].nunique() == 3
+    assert endpoint["Groupe"].nunique() == 3
+    assert kinetic["type"].value_counts().to_dict() == {"souche": 3, "blanc": 3}
+    assert endpoint["type"].value_counts().to_dict() == {"souche": 3, "blanc": 3}
+
+
 def test_manual_point_and_series_decisions_are_applied_end_to_end():
     data = filter_experiment_data(workflow_table(), ["S1"], ["M1"])
     point_index = data.index[(data["sample_header"] == "S1 (A01)") & (data["temps_h"] == 1)][0]

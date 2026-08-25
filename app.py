@@ -16,6 +16,7 @@ from luxplate.display_order import reconcile_display_order
 from luxplate.figure_lifecycle import (filter_result_strains,
                                        invalidate_guided_analysis_state,
                                        validate_figure_render)
+from luxplate.media import logical_media
 from luxplate.plotting import (build_guided_corrected_figures,
                                build_guided_crosstalk_figures, build_guided_raw_figures,
                                build_publication_figures, collect_publication_statistics,
@@ -909,9 +910,7 @@ with guided_tab:
             strain_options = sorted(
                 guided_data.loc[guided_data["type"].eq("souche"), "souche"].unique()
             )
-            medium_options = sorted(
-                guided_data.loc[guided_data["type"].eq("souche"), "Groupe"].unique()
-            )
+            medium_options = sorted(logical_media(guided_data))
             st.subheader("Sélection de l'analyse")
             st.caption(
                 "Préparez votre sélection librement : aucun calcul ni graphique ne sera "

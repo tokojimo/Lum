@@ -16,6 +16,7 @@ from matplotlib.ticker import FuncFormatter
 from matplotlib.transforms import blended_transform_factory
 
 from luxplate.display_order import ordered_present
+from luxplate.media import medium_label
 
 from luxplate.kinetics import run_kinetics
 from luxplate.statistics import (all_pairwise_comparisons, directional_test_diagnostics,
@@ -117,14 +118,8 @@ def _panel_title(value: object, *, width: int = 32) -> str:
 
 
 def _medium_label(value: object) -> str:
-    """Remove an experiment prefix so replicate panels can be pooled by medium."""
-    label = str(value).strip()
-    match = re.fullmatch(
-        r"exp(?:eriment)?\s*\d+\s*\|\s*(.+)",
-        label,
-        flags=re.IGNORECASE,
-    )
-    return match.group(1).strip() if match else label
+    """Compatibility wrapper around the central medium normalizer."""
+    return medium_label(value)
 
 
 def _ordered_plot_values(values, preferred: tuple[str, ...], *, media: bool = False) -> list[str]:
@@ -229,7 +224,8 @@ def _has_multiple_experiments(data: pd.DataFrame) -> bool:
     if "experience_id" in data and data["experience_id"].dropna().astype(str).nunique() > 1:
         return True
     experiments = data["Groupe"].astype(str).str.extract(
-        r"^\s*(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE, expand=False,
+        r"^\s*(?:(?:kinetic|endpoint)\s*\|\s*)?"
+        r"(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE, expand=False,
     )
     return experiments.dropna().str.casefold().nunique() > 1
 
@@ -240,9 +236,12 @@ def _pooled_media(data: pd.DataFrame) -> pd.DataFrame:
     # the mixed plot replaces ``Groupe`` with the pooled medium.  Otherwise the
     # only experiment identifier is lost and technical wells can become the SD
     # observations (or make an error bar incorrectly collapse to zero).
-    if "experience_id" not in pooled or not pooled["experience_id"].notna().any():
+    if (("experience_id" not in pooled or not pooled["experience_id"].notna().any())
+            and ("_experiment_from_group" not in pooled
+                 or not pooled["_experiment_from_group"].notna().any())):
         pooled["_experiment_from_group"] = pooled["Groupe"].astype(str).str.extract(
-            r"^\s*(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE,
+            r"^\s*(?:(?:kinetic|endpoint)\s*\|\s*)?"
+            r"(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE,
             expand=False,
         ).str.casefold()
     pooled["Milieu"] = pooled["Groupe"].map(_medium_label)
@@ -346,7 +345,8 @@ def _aligned_biological_summary(data: pd.DataFrame, value: str,
     group_experiment = work.get("_experiment_from_group")
     if group_experiment is None or not group_experiment.notna().any():
         group_experiment = (work["Groupe"].astype(str).str.extract(
-            r"^\s*(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE,
+            r"^\s*(?:(?:kinetic|endpoint)\s*\|\s*)?"
+            r"(exp(?:eriment)?\s*\d+)\s*\|", flags=re.IGNORECASE,
             expand=False,
         ).str.casefold() if "Groupe" in work else
             pd.Series(pd.NA, index=work.index, dtype="string"))
@@ -394,6 +394,9 @@ def plot_publication_panels(data: pd.DataFrame, *, value: str, group_by: str = "
     if y_scale not in {"linear", "log"}:
         raise ValueError("Scale must be 'linear' or 'log'.")
     work = data.loc[data[value].notna()].copy()
+    if group_by == "Groupe":
+        work = _pooled_media(work)
+        work["Groupe"] = work["Milieu"]
     if y_scale == "log":
         work = work.loc[pd.to_numeric(work[value], errors="coerce").gt(0)]
     if "type" in work:
@@ -479,6 +482,11 @@ def plot_mixed_panels(data: pd.DataFrame, *, lum_scale: str = "linear",
     if lum_scale not in {"linear", "log"} or uncertainty not in {"bars", "ribbon"}:
         raise ValueError("Unknown scale or uncertainty representation.")
     work = data.loc[data.get("type", "souche").eq("souche")].copy() if "type" in data else data.copy()
+    # Internal experiment/import namespaces must never become panels or legend
+    # entries.  Keep the original experiment identity separately while using
+    # the biological medium for this figure's grouping.
+    work = _pooled_media(work)
+    work["Groupe"] = work["Milieu"]
     if media:
         work = work.loc[work["Groupe"].astype(str).isin(media)]
     if strains:
