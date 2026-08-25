@@ -9,6 +9,7 @@ import pandas as pd
 
 from .blanks import BlankCorrectionResult, run_blank_correction
 from .kinetics import KineticsResult, run_kinetics
+from .media import medium_label
 from .normalization import NormalizationResult, run_normalization
 from .qc import DECISION_COLUMNS
 
@@ -34,7 +35,10 @@ def filter_experiment_data(
     selected_strains = data["souche"].astype(str).isin(strains)
     inferred_groups = data.loc[strain_rows & selected_strains, "Groupe"].astype(str).unique()
     if groups is not None:
-        inferred_groups = [group for group in inferred_groups if group in set(map(str, groups))]
+        selected_media = set(map(str, groups))
+        inferred_groups = [
+            group for group in inferred_groups if medium_label(group) in selected_media
+        ]
     if not len(inferred_groups):
         raise ValueError("La sélection ne contient aucune série de souche.")
     groups = list(inferred_groups)

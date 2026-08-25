@@ -96,6 +96,7 @@ def test_mixed_import_combines_both_formats_without_internal_id_collisions():
         lambda values: values.str.startswith(values.name + "|").all()
     ).all()
     assert result.query("import_format == 'endpoint'")["temps_h"].eq(2.5).all()
+    assert result["Milieu"].tolist() == result["Groupe"].str.split("|").str[-1].tolist()
 
 
 def test_mixed_import_requires_both_file_formats():

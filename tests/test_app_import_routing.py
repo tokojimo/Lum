@@ -39,6 +39,7 @@ def test_mixed_mode_offers_per_workbook_parser_selection():
     assert 'mixed_mode = import_mode == "Mode mixte"' in source
     assert 'f"Contenu — {upload.name}"' in source
     assert "combine_mixed_tables(kinetic_inputs, endpoint_inputs, mapping)" in source
+    assert "medium_options = sorted(logical_media(guided_data))" in source
 
 
 def test_single_luminescence_sheet_is_selected_without_a_selectbox():

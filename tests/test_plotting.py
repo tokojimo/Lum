@@ -930,6 +930,29 @@ def test_scfm2_screening_conditions_have_three_biological_pairs():
     plt.close(figure)
 
 
+def test_mixed_internal_prefixes_form_two_public_scientific_conditions():
+    strain = "14.1Ac attB::PspeD2-1A-lux"
+    metrics = pd.DataFrame([
+        {"souche": strain, "Groupe": f"{family}|exp{experiment}|{medium}",
+         "experience": f"{family}-{experiment}", "lum_norm_auc": experiment * 10}
+        for family, medium in (("kinetic", "SCFM2-KPi"), ("endpoint", "SCFM2 (Po)"))
+        for experiment in (1, 2, 3)
+    ])
+
+    options = directional_condition_options(metrics)
+    assert list(options) == [
+        "PspeD2-1A · SCFM2-KPi", "PspeD2-1A · SCFM2 (Po)",
+    ]
+    assert not any("kinetic|" in label or "endpoint|" in label for label in options)
+
+    figure = plot_metric_points(metrics, metric="lum_norm_auc", compare_media=True)
+    conditions = set(figure._luxplate_statistics["condition_1"]) | set(
+        figure._luxplate_statistics["condition_2"]
+    )
+    assert conditions == {(strain, "SCFM2-KPi"), (strain, "SCFM2 (Po)")}
+    plt.close(figure)
+
+
 def test_tuple_conditions_with_common_reporter_are_never_merged():
     metrics = pd.DataFrame([
         {"souche": "Reporter", "Groupe": medium, "experience": f"exp{bio}",
@@ -982,7 +1005,7 @@ def test_gallery_adds_pooled_recap_figures_for_multiple_experiments():
 def test_experiment_and_pooled_panel_labels_preserve_medium_parentheses():
     data = _publication_table().assign(Groupe="exp2|SCFM2 (Po)")
     figure = plot_publication_panels(data, value="DO_corr")
-    assert figure.axes[0].get_title() == "Experiment 2 – SCFM2 (Po)"
+    assert figure.axes[0].get_title() == "SCFM2 (Po)"
     figures = build_publication_figures(
         pd.concat([data.assign(experience_id="exp2"),
                    data.assign(experience_id="exp3", Groupe="exp3|SCFM2 (Po)")]),

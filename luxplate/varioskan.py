@@ -15,6 +15,8 @@ from typing import BinaryIO, Iterable
 import pandas as pd
 from openpyxl import load_workbook
 
+from .media import medium_label
+
 HEADER_READING = "Lecture en cours"
 HEADER_TIME = "temps moy. [s]"
 PLATE_ROWS = set("ABCDEFGH")
@@ -490,6 +492,9 @@ def combine_mixed_tables(
         for column in ("Groupe", "sample_header"):
             normalized[column] = prefix + "|" + normalized[column].fillna("").astype(str)
         normalized["import_format"] = prefix
+        # Groupe remains namespaced for blank association and collision safety;
+        # Milieu is its biological/display identity.
+        normalized["Milieu"] = normalized["Groupe"].map(medium_label)
         parts.append(normalized)
     return pd.concat(parts, ignore_index=True, sort=False)
 
