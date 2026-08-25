@@ -166,12 +166,12 @@ def calculate_luminescence_metrics(
     series: pd.DataFrame, window_start_h: float | None = None, window_end_h: float | None = None,
     lum_norm_auc_do_cutoff: float | None = None,
 ) -> dict[str, float | int | str]:
-    """Calculate luminescence metrics, optionally ending normalized AUC at an OD.
+    """Calculate instantaneous and integrated luminescence metrics.
 
-    The cutoff only affects ``integral(Lum_norm, time)``.  At the first upward
-    crossing, one linearly interpolated boundary point is appended; the rest of
-    the curve is never resampled.  ``None`` preserves the complete common time
-    window.
+    ``Lum_norm`` is used only for its instantaneous peak.  The integrated
+    normalized metric is ``AUC(Lum_corr) / AUC(DO_corr - min(DO_corr))``.
+    When an OD cutoff is supplied, both areas use the same curve, truncated at
+    its first upward crossing with one linearly interpolated boundary point.
     """
     peak, peak_time = calculate_peak(series["temps_h"], series["Lum_norm"])
     finite_norm = np.isfinite(pd.to_numeric(series["Lum_norm"], errors="coerce"))
@@ -185,57 +185,60 @@ def calculate_luminescence_metrics(
     )
     common = np.isfinite(time) & np.isfinite(od) & np.isfinite(lum) & in_window
     auc_time, auc_od, auc_lum = time[common], od[common], lum[common]
+    order = np.argsort(auc_time, kind="stable")
+    auc_time, auc_od, auc_lum = (
+        values[order] for values in (auc_time, auc_od, auc_lum)
+    )
     # Blank correction can make the first OD observations negative. Translate
     # the complete common-window OD curve so that its minimum is zero rather
     # than allowing those observations to subtract from the integrated biomass.
-    od_auc = calculate_baseline_shifted_auc(auc_time, auc_od)
-    lum_auc = calculate_auc(auc_time, auc_lum)
-    norm = pd.to_numeric(series["Lum_norm"], errors="coerce").to_numpy(float)
-    norm_common = np.isfinite(time) & np.isfinite(od) & np.isfinite(norm) & in_window
-    norm_time, norm_od, norm_values = (array[norm_common] for array in (time, od, norm))
-    order = np.argsort(norm_time, kind="stable")
-    norm_time, norm_od, norm_values = norm_time[order], norm_od[order], norm_values[order]
     auc_reason = ""
+    integration_time, integration_od, integration_lum = auc_time, auc_od, auc_lum
     if lum_norm_auc_do_cutoff is not None:
         cutoff = float(lum_norm_auc_do_cutoff)
-        crossings = np.flatnonzero(norm_od >= cutoff)
+        crossings = np.flatnonzero(auc_od >= cutoff)
         crossing = int(crossings[0]) if len(crossings) else -1
-        if crossing < 0:
-            auc_reason = "do_cutoff_not_reached"
-            norm_time = norm_values = np.array([], dtype=float)
-        elif crossing == 0:
+        if crossing <= 0:
             # There is no observed below-threshold segment on which to
             # interpolate a crossing or integrate a meaningful interval.
             auc_reason = "do_cutoff_not_reached"
-            norm_time = norm_values = np.array([], dtype=float)
         else:
-            t0, t1 = norm_time[crossing - 1], norm_time[crossing]
-            od0, od1 = norm_od[crossing - 1], norm_od[crossing]
-            y0, y1 = norm_values[crossing - 1], norm_values[crossing]
+            t0, t1 = auc_time[crossing - 1], auc_time[crossing]
+            od0, od1 = auc_od[crossing - 1], auc_od[crossing]
+            lum0, lum1 = auc_lum[crossing - 1], auc_lum[crossing]
             if np.isclose(od1, cutoff):
-                boundary_t, boundary_y = t1, y1
+                boundary_t, boundary_od, boundary_lum = t1, od1, lum1
             elif od1 > od0:
                 fraction = (cutoff - od0) / (od1 - od0)
                 boundary_t = t0 + fraction * (t1 - t0)
-                boundary_y = y0 + fraction * (y1 - y0)
+                boundary_od = cutoff
+                boundary_lum = lum0 + fraction * (lum1 - lum0)
             else:
                 auc_reason = "do_cutoff_not_reached"
-                norm_time = norm_values = np.array([], dtype=float)
-                boundary_t = boundary_y = np.nan
             if not auc_reason:
-                norm_time = np.append(norm_time[:crossing], boundary_t)
-                norm_values = np.append(norm_values[:crossing], boundary_y)
-    norm_auc = calculate_auc(norm_time, norm_values) if not auc_reason else np.nan
+                integration_time = np.append(auc_time[:crossing], boundary_t)
+                integration_od = np.append(auc_od[:crossing], boundary_od)
+                integration_lum = np.append(auc_lum[:crossing], boundary_lum)
+    od_auc = calculate_baseline_shifted_auc(integration_time, integration_od)
+    lum_auc = calculate_auc(integration_time, integration_lum)
+    if not auc_reason and len(integration_time) < 2:
+        auc_reason = "insufficient_auc_points"
+    if not auc_reason and (not np.isfinite(od_auc) or od_auc <= 0):
+        auc_reason = "non_positive_od_auc"
+    norm_auc = lum_auc / od_auc if not auc_reason else np.nan
     covers_window = bool(
         len(auc_time) >= 2 and np.isclose(auc_time, start).any() and np.isclose(auc_time, end).any()
     )
     result = {"n_lum_norm_points": int(finite_norm.sum()),
-              "n_lum_norm_auc_points": int(len(norm_time)), "n_auc_points": int(common.sum()),
+              "n_lum_norm_auc_points": int(len(integration_time)) if not auc_reason else 0,
+              "n_auc_points": int(common.sum()),
               "auc_covers_common_window": covers_window, "lum_norm_peak": peak,
               "lum_norm_peak_time_h": peak_time, "lum_norm_auc": norm_auc,
               "lum_norm_auc_reason": auc_reason,
               "lum_norm_auc_do_cutoff": lum_norm_auc_do_cutoff,
-              "lum_corr_auc": lum_auc, "fixed_window_od_auc": od_auc}
+              "lum_corr_auc": lum_auc, "fixed_window_od_auc": od_auc,
+              "effective_auc_window_end_h": (float(integration_time[-1])
+                                              if len(integration_time) else np.nan)}
     if "Lum_corr" in series:
         corr_peak, corr_time = calculate_peak(series["temps_h"], series["Lum_corr"])
         result.update(lum_corr_peak=corr_peak, lum_corr_peak_time_h=corr_time)
@@ -342,8 +345,8 @@ def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
                              "message": "Le taux de croissance et/ou le temps de doublement n'est pas publiable."})
         if lum["lum_norm_auc_reason"]:
             warnings.append({**identity, "code": lum["lum_norm_auc_reason"],
-                             "message": ("La série n'atteint pas la DO maximale validée et "
-                                         "est exclue uniquement de l'AUC normalisée.")})
+                             "message": ("L'AUC de luminescence normalisée n'est pas "
+                                         "calculable sur la fenêtre demandée.")})
         finite_any = np.isfinite(series[["DO_corr", "Lum_norm"]].to_numpy(dtype=float)).all(axis=1)
         used_times = series.loc[finite_any, "temps_h"]
         growth["od_auc"] = lum["fixed_window_od_auc"]
@@ -355,10 +358,13 @@ def extract_series_kinetics(data: pd.DataFrame, growth_window_points: int = 3,
             "growth_window_min_duration_h": growth_window_min_duration_h,
             "growth_rate_min_r_squared": growth_rate_min_r_squared,
             "minimum_auc_points": minimum_auc_points,
-            "auc_window_start_h": window_start, "auc_window_end_h": window_end,
-            "auc_window_duration_h": window_end - window_start, **growth,
+            "auc_window_start_h": window_start,
+            "auc_window_end_h": lum["effective_auc_window_end_h"],
+            "auc_window_duration_h": lum["effective_auc_window_end_h"] - window_start,
+            **growth,
             **{key: value for key, value in lum.items()
-               if key not in {"auc_covers_common_window", "fixed_window_od_auc"}}})
+               if key not in {"auc_covers_common_window", "fixed_window_od_auc",
+                              "effective_auc_window_end_h"}}})
     return (_table(metrics, SERIES_METRIC_COLUMNS), _table(rejected, REJECTED_SERIES_COLUMNS),
             _table(warnings, WARNING_COLUMNS))
 
