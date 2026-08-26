@@ -36,6 +36,7 @@ PROJECT_KEYS = (
     "guided_directional_comparisons_validated",
     "guided_pair_mapping",
     "guided_result_strains",
+    "guided_all_strains_y_range",
 )
 
 

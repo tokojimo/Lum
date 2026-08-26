@@ -17,6 +17,7 @@ from luxplate.export import figure_bytes, package_figures
 from luxplate.display_order import reconcile_display_order
 from luxplate.figure_lifecycle import (filter_result_strains,
                                        invalidate_guided_analysis_state,
+                                       result_strain_options as available_result_strains,
                                        validate_figure_render)
 from luxplate.media import logical_media
 from luxplate.kinetics import run_kinetics
@@ -115,6 +116,7 @@ def cached_guided_crosstalk_figures(data: pd.DataFrame, sample_type: str):
 
 def build_current_publication_figures(
     data: pd.DataFrame,
+    y_range_data: pd.DataFrame | None,
     title: str,
     families: tuple[str, ...],
     panel_by: str,
@@ -145,6 +147,7 @@ def build_current_publication_figures(
     )
     figures = build_publication_figures(
         data, title=title, families=families, panel_by=panel_by, lum_scale=lum_scale,
+        y_range_data=y_range_data,
         metric_scale=metric_scale,
         directional_comparisons=directional_comparisons,
         show_technical_replicates=show_technical_replicates,
@@ -402,7 +405,7 @@ def render_guided_results(complete, base: str) -> None:
             "sans relancer l'analyse."
         )
         normalized_data = complete.normalization.normalized_data
-        result_strain_options = sorted(normalized_data["souche"].dropna().unique())
+        result_strain_options = available_result_strains(normalized_data)
         # This is display state only.  In particular it is intentionally absent
         # from ``guided_signature``, which represents the inputs to the
         # scientific calculation.
@@ -413,6 +416,15 @@ def render_guided_results(complete, base: str) -> None:
             key="guided_result_strains",
             help=("Filtre uniquement les figures finales déjà calculées ; aucune correction "
                   "ni analyse n'est relancée."),
+        )
+        use_all_strains_y_range = st.checkbox(
+            "Même axe Y pour toutes les souches disponibles",
+            value=False,
+            key="guided_all_strains_y_range",
+            help=("Si cette option est cochée, les limites minimale et maximale de l’axe Y "
+                  "tiennent compte de toutes les souches proposées dans « Souches à afficher », "
+                  "y compris celles qui ne sont pas sélectionnées. Sinon, l’axe s’adapte aux "
+                  "seules souches affichées."),
         )
         if not displayed_strains:
             st.info("Sélectionnez au moins une souche à afficher.")
@@ -558,6 +570,7 @@ def render_guided_results(complete, base: str) -> None:
                 medium_order=guided_medium_order,
                 reporter_order=guided_reporter_order,
                 lum_norm_auc_do_cutoff=auc_do_cutoff,
+                y_range_data=normalized_data if use_all_strains_y_range else None,
             )
             _figure_debug(
                 "FIGURE_BUILD_REQUEST", context="full_render",

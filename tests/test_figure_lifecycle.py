@@ -7,6 +7,7 @@ from pandas.testing import assert_frame_equal
 from luxplate.export import figure_bytes
 from luxplate.figure_lifecycle import (
     filter_result_strains,
+    result_strain_options,
     invalidate_guided_analysis_state,
     validate_figure_render,
 )
@@ -68,6 +69,30 @@ def test_result_strain_navigation_rebuilds_auc_without_replacing_complete_result
     assert_frame_equal(strain_a.reset_index(drop=True), strain_a_again.reset_index(drop=True))
     for figure in (figure_a, figure_b, figure_a_again):
         assert_visible_auc(figure)
+        plt.close(figure)
+
+
+def test_result_strain_options_exclude_blank_controls():
+    data = publication_table()
+    blank = data.iloc[:1].assign(souche="Blanc", type=" blanc ")
+
+    assert result_strain_options(pd.concat([data, blank])) == ["P0-lux", "Reporter-lux"]
+
+
+def test_selected_strain_can_use_y_range_from_all_available_strains():
+    data = publication_table()
+    data.loc[data["souche"].eq("Reporter-lux"), "DO_corr"] *= 10
+    selected = filter_result_strains(data, ["P0-lux"])
+
+    local = dict(build_publication_figures(selected, families=("growth",)))["croissance"]
+    shared = dict(build_publication_figures(
+        selected, families=("growth",), y_range_data=data
+    ))["croissance"]
+    full = dict(build_publication_figures(data, families=("growth",)))["croissance"]
+
+    assert shared.axes[0].get_ylim() == full.axes[0].get_ylim()
+    assert local.axes[0].get_ylim() != shared.axes[0].get_ylim()
+    for figure in (local, shared, full):
         plt.close(figure)
 
 
