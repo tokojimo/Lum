@@ -1070,6 +1070,7 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
     medium_order: tuple[str, ...] = (),
     reporter_order: tuple[str, ...] = (),
     lum_norm_auc_do_cutoff: float | None = None,
+    y_range_data: pd.DataFrame | None = None,
     diagnostic_run_id="unknown") -> list[tuple[str, object]]:
     """Build the curve families represented in the historical example scripts."""
     if width_scale <= 0 or height_scale <= 0:
@@ -1179,6 +1180,36 @@ def build_publication_figures(data: pd.DataFrame, *, title: str = "",
         figures.extend(build_control_comparisons(data, control=control, lum_scale=lum_scale,
             uncertainty=uncertainty, title="Targeted control comparison",
             medium_order=medium_order, reporter_order=reporter_order))
+    if y_range_data is not None:
+        reference_figures = build_publication_figures(
+            y_range_data, title=title, families=families, panel_by=panel_by,
+            lum_scale=lum_scale, normalized_scale=normalized_scale,
+            metric_scale=metric_scale, uncertainty=uncertainty, control=control,
+            directional_comparisons=directional_comparisons,
+            statistical_transform=statistical_transform, alternative=alternative,
+            significant_only=significant_only,
+            show_technical_replicates=show_technical_replicates,
+            medium_order=medium_order, reporter_order=reporter_order,
+            lum_norm_auc_do_cutoff=lum_norm_auc_do_cutoff,
+            diagnostic_run_id=diagnostic_run_id,
+        )
+        reference_by_name = dict(reference_figures)
+        for name, figure in figures:
+            reference = reference_by_name.get(name)
+            if reference is None:
+                continue
+            reference_limits: dict[tuple[str, str], tuple[float, float]] = {}
+            for axis in reference.axes:
+                key = (axis.get_ylabel(), axis.get_yscale())
+                low, high = axis.get_ylim()
+                previous = reference_limits.get(key, (low, high))
+                reference_limits[key] = (min(previous[0], low), max(previous[1], high))
+            for axis in figure.axes:
+                limits = reference_limits.get((axis.get_ylabel(), axis.get_yscale()))
+                if limits is not None:
+                    axis.set_ylim(limits)
+        for _, reference in reference_figures:
+            plt.close(reference)
     for _, figure in figures:
         width, height = figure.get_size_inches()
         figure.set_size_inches(width * width_scale, height * height_scale)

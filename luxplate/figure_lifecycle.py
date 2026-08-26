@@ -38,6 +38,17 @@ def filter_result_strains(
     return data.loc[data["souche"].isin(selected)].copy()
 
 
+def result_strain_options(data: pd.DataFrame) -> list[str]:
+    """Return displayable sample strains, excluding blank-control rows."""
+    if "souche" not in data.columns:
+        raise ValueError("Les résultats normalisés ne contiennent pas de colonne 'souche'.")
+    samples = data
+    if "type" in samples.columns:
+        sample_types = samples["type"].astype("string").str.strip().str.casefold()
+        samples = samples.loc[sample_types.eq("souche")]
+    return sorted(samples["souche"].dropna().astype(str).unique().tolist())
+
+
 def invalidate_guided_analysis_state(state: MutableMapping[str, object]) -> None:
     """Discard every selection-dependent guided-analysis value.
 
