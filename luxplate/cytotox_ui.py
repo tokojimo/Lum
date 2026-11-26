@@ -292,8 +292,8 @@ def _render_final_results(
         st.image(_signal_figure_png(signal, selected_wells, f"{title} — {signal.name}"))
 
     st.caption(
-        "AUC par puits. Les trapèzes relient les mesures conservées. "
-        "Un puits sans mesure à l’une des bornes est omis."
+        "L’AUC de chaque puits est calculée entre sa première et sa dernière mesure conservée. "
+        "Les trapèzes relient les mesures restantes."
     )
     for signal in reversed(signals):  # IP first, then GFP
         label = f"AUC {signal.name}"
@@ -301,13 +301,13 @@ def _render_final_results(
         auc = auc_by_well(signal.data)
         samples = {strain: {"": auc.reindex(wells).dropna()} for strain, wells in selected_wells.items()}
         if all(groups[""].empty for groups in samples.values()):
-            st.info("Aucune AUC disponible. Chaque puits doit avoir une mesure à chacune des deux bornes.")
+            st.info("Aucune AUC disponible. Il faut au moins deux mesures conservées par puits.")
             continue
 
         start_minute = float(signal.data.index[0] * 60)
         end_minute = float(signal.data.index[-1] * 60)
         st.image(_auc_boxplot_png(
-            samples, f"{title} — {label} ({start_minute:g}–{end_minute:g} min)", f"{label} (signal × min)",
+            samples, f"{title} — {label} (fenêtre {start_minute:g}–{end_minute:g} min)", f"{label} (signal × min)",
         ))
 
 
@@ -326,7 +326,7 @@ def _render_intermanip_results(
             st.info("Aucune fenêtre mesurée commune pour ce signal.")
             continue
         start, end = window
-        st.caption(f"Fenêtre commune : {start:g}–{end:g} min.")
+        st.caption(f"Fenêtre commune aux mesures conservées · {start:g}–{end:g} min.")
         samples: dict[str, dict[str, pd.Series]] = {strain: {} for strain in ordered}
         for name, wells, reference_wells, signals in completed:
             ratios = relative_auc_by_well(signals[signal_index].data, reference_wells, window)

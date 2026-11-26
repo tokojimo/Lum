@@ -104,13 +104,13 @@ def test_ip_normalization_requires_time_zero_in_both_sheets(workbook):
         normalize_ip(gfp.data.drop(index=0), ip.data, 1200)
 
 
-def test_auc_uses_minutes_and_keeps_a_common_window_after_exclusions():
+def test_auc_uses_retained_points_including_when_endpoints_are_excluded():
     ip = pd.DataFrame(
         {"A1": [0, 3, 4], "A2": [0, np.nan, 4], "A3": [0, 3, np.nan], "A4": [np.nan, 3, 4]},
         index=[0, 0.5, 1],
     )
     auc = auc_by_well(ip)
-    np.testing.assert_allclose(auc, [150, 120, np.nan, np.nan])
+    np.testing.assert_allclose(auc, [150, 120, 45, 105])
     assert auc_by_well(ip.iloc[[0]]).isna().all()
 
 
@@ -129,7 +129,11 @@ def test_intermanip_auc_uses_the_common_window_and_each_workbook_reference():
     np.testing.assert_allclose(relative_auc_by_well(second, ["A1", "A2"], window), [.5, 1.5, 3])
 
     second.loc[1.25, "B1"] = np.nan
-    assert pd.isna(relative_auc_by_well(second, ["A1", "A2"], window)["B1"])
+    first.loc[0, "B1"] = np.nan
+    window = common_auc_window([first, second])
+    assert window == (30, 45)
+    np.testing.assert_allclose(relative_auc_by_well(first, ["A1", "A2"], window), [.5, 1.5, 2])
+    np.testing.assert_allclose(relative_auc_by_well(second, ["A1", "A2"], window), [.5, 1.5, 3])
     assert relative_auc_by_well(second, ["H12"], window) is None
     assert relative_auc_by_well(first * 0, ["A1", "A2"], window) is None
     assert common_auc_window([first, second.set_axis([2, 3, 4])]) is None
