@@ -47,16 +47,16 @@ def normalize_ip(gfp: pd.DataFrame, ip: pd.DataFrame, end_minutes: float) -> pd.
     ).replace([np.inf, -np.inf], np.nan)
 
 
-def ip_auc_by_well(ip: pd.DataFrame) -> pd.Series:
-    """Integrate filtered IP in minutes over the same measured interval for every well."""
-    auc = pd.Series(np.nan, index=ip.columns, dtype=float)
-    if len(ip.index) < 2:
+def auc_by_well(data: pd.DataFrame) -> pd.Series:
+    """Integrate filtered measurements in minutes over the same measured interval for every well."""
+    auc = pd.Series(np.nan, index=data.columns, dtype=float)
+    if len(data.index) < 2:
         return auc
     # A missing endpoint would shorten the window for this well. Interior
     # gaps are handled by the shared trapezoidal integration.
-    endpoints = ip.iloc[[0, -1]].notna().all()
+    endpoints = data.iloc[[0, -1]].notna().all()
     for well in endpoints[endpoints].index:
-        auc.loc[well] = calculate_auc(ip.index * 60, ip[well])
+        auc.loc[well] = calculate_auc(data.index * 60, data[well])
     return auc
 
 
