@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from contextlib import nullcontext
+from dataclasses import replace
 from hashlib import sha256
 from textwrap import fill
 
@@ -17,9 +18,10 @@ from .cytotox import (
     normalize_ip, read_cytotox_workbook, relative_auc_by_well,
 )
 from .cytotox_grid import review_exclusions
-from .cytotox_statistics import biological_auc_medians, paired_auc_comparisons
+from .cytotox_statistics import biological_auc_medians, blocked_auc_anova, tukey_stars
 from .display_order import reconcile_display_order
 from .export import figure_bytes
+from .plotting import _bracket_draw_coordinates, _bracket_levels
 
 
 PLATE_STYLE = """
@@ -91,7 +93,7 @@ def _signal_figure(
             replicate_lines.setdefault(replicate, line)
 
         if not axis.lines:
-            axis.text(0.5, 0.5, "Aucune mesure", transform=axis.transAxes, ha="center", va="center")
+            axis.text(0.5, 0.5, "No measurements", transform=axis.transAxes, ha="center", va="center")
         axis.set_title(fill(strain, width=39), fontsize=10, parse_math=False)
         axis.tick_params(labelsize=8, labelbottom=True, labelleft=True)
         axis.grid(True, alpha=0.22)
@@ -99,7 +101,7 @@ def _signal_figure(
         if column == 0:
             axis.set_ylabel(fill(signal.metric, width=24), fontsize=9, parse_math=False)
         if index + columns >= len(wells_by_strain):
-            axis.set_xlabel("Temps (min)", fontsize=9)
+            axis.set_xlabel("Time (min)", fontsize=9)
 
     for axis in axes.flat[len(wells_by_strain):]:
         axis.set_visible(False)
@@ -108,7 +110,7 @@ def _signal_figure(
     if replicate_lines:
         handles = [replicate_lines[key] for key in sorted(replicate_lines)]
         figure.legend(
-            handles=handles, loc="outside lower center", title="Répétition technique",
+            handles=handles, loc="outside lower center", title="Technical replicate",
             ncols=min(6, len(handles)), fontsize=9, frameon=False,
         )
     return figure
@@ -196,15 +198,17 @@ def render_cytotox() -> None:
             figure_title = Path(filename).stem
             raw_figures = st.expander("Courbes brutes GFP et IP") if multiple_files else nullcontext()
             with raw_figures:
-                for title, signal in zip(("GFP raw", "IP raw"), workbook.signals[:2]):
-                    st.image(_signal_figure_png(signal, selected_wells, f"{figure_title} — {title}"))
+                for signal, label in zip(workbook.signals[:2], ("Raw GFP", "Raw IP")):
+                    st.image(_signal_figure_png(
+                        replace(signal, metric=f"{label} signal"), selected_wells, f"{figure_title} — {label}",
+                    ))
             reference_wells = wells.get(REFERENCE_STRAIN, []) if compare else []
             signals, action = _render_normalized(
                 file_id, figure_title, workbook, selected_wells,
                 reference_wells=reference_wells, compact=multiple_files,
             )
             if signals is not None:
-                completed.append((f"Rép. biologique {number} · {filename}", selected_wells, reference_wells, signals))
+                completed.append((f"Biological replicate {number} · {filename}", selected_wells, reference_wells, signals))
             else:
                 pending.append(f"{workbook_labels[number - 1]} · {action}")
 
@@ -258,8 +262,8 @@ def _render_normalized(
         )
 
     signals = (
-        CytotoxSignal("GFP normalisé", gfp_final.sheet_name, "GFP normalisé", gfp_data),
-        CytotoxSignal("IP normalisé", ip.sheet_name, "IP normalisé", ip_data),
+        CytotoxSignal("Normalized GFP", gfp_final.sheet_name, "Normalized GFP", gfp_data),
+        CytotoxSignal("Normalized IP", ip.sheet_name, "Normalized IP", ip_data),
     )
     with st.container():
         st.subheader("Courbes normalisées")
@@ -297,7 +301,7 @@ def _render_final_results(
         "Les trapèzes relient les mesures restantes."
     )
     for signal in reversed(signals):  # IP first, then GFP
-        label = f"AUC {signal.name}"
+        label = f"{signal.name} AUC"
         st.subheader(label)
         auc = auc_by_well(signal.data)
         samples = {strain: {"": auc.reindex(wells).dropna()} for strain, wells in selected_wells.items()}
@@ -308,7 +312,7 @@ def _render_final_results(
         start_minute = float(signal.data.index[0] * 60)
         end_minute = float(signal.data.index[-1] * 60)
         st.image(_auc_boxplot_png(
-            samples, f"{title} — {label} (fenêtre {start_minute:g}–{end_minute:g} min)", f"{label} (signal × min)",
+            samples, f"{title} — {label} ({start_minute:g}–{end_minute:g} min)", f"{label} (signal × min)",
         ))
 
 
@@ -317,8 +321,7 @@ def _render_intermanip_results(
     ordered: list[str],
 ) -> None:
     boxplots, statistics = st.tabs(["Box plots", "Statistiques"])
-    summaries: dict[str, tuple[tuple[float, float], pd.DataFrame]] = {}
-    conditions = list(dict.fromkeys([*ordered, REFERENCE_STRAIN]))
+    summaries = {}
     with boxplots:
         st.caption(
             f"Chaque point est l’AUC d’un puits divisée par la médiane des AUC de {REFERENCE_STRAIN} "
@@ -332,77 +335,98 @@ def _render_intermanip_results(
                 continue
             start, end = window
             st.caption(f"Fenêtre commune aux mesures conservées · {start:g}–{end:g} min.")
-            samples: dict[str, dict[str, pd.Series]] = {strain: {} for strain in conditions}
+            samples: dict[str, dict[str, pd.Series]] = {strain: {} for strain in ordered}
             for name, wells, reference_wells, signals in completed:
                 ratios = relative_auc_by_well(signals[signal_index].data, reference_wells, window)
                 if ratios is None:
                     st.warning(f"{name} · médiane de référence {REFERENCE_STRAIN} indisponible ou nulle pour {label}.")
                     ratios = pd.Series(dtype=float)
-                for strain in conditions:
+                for strain in ordered:
                     group = reference_wells if strain == REFERENCE_STRAIN else wells.get(strain, [])
                     samples[strain][name] = ratios.reindex(group).dropna()
 
-            summaries[label] = (window, biological_auc_medians(samples))
-            displayed = {strain: samples[strain] for strain in ordered}
-            if all(values.empty for groups in displayed.values() for values in groups.values()):
+            biological = biological_auc_medians(samples)
+            blocks, anova, comparisons = blocked_auc_anova(biological)
+            summaries[label] = (window, blocks, biological, anova, comparisons)
+            if all(values.empty for groups in samples.values() for values in groups.values()):
                 st.info("Aucun puits exploitable pour cette comparaison.")
                 continue
             st.image(_auc_boxplot_png(
-                displayed, f"AUC {label} inter-manip ({start:g}–{end:g} min)", f"AUC {label} / médiane {REFERENCE_STRAIN}",
+                samples, f"{label} AUC across experiments ({start:g}–{end:g} min)",
+                f"{label} AUC / {REFERENCE_STRAIN} median", comparisons=comparisons,
             ))
 
     with statistics:
         _render_intermanip_statistics(summaries)
 
 
-def _render_intermanip_statistics(
-    summaries: dict[str, tuple[tuple[float, float], pd.DataFrame]],
-) -> None:
-    st.subheader("Statistiques des AUC inter-manip")
-    available = list(dict.fromkeys(
-        condition for _, data in summaries.values() for condition in data.columns[data.notna().any()]
-    ))
-    if not available:
-        st.info("Aucune AUC inter-manip exploitable pour les statistiques.")
-        return
-    reference = st.selectbox(
-        "Condition de comparaison", available,
-        index=available.index(REFERENCE_STRAIN) if REFERENCE_STRAIN in available else 0,
-        key="cytotox_statistics_reference",
-    )
+def _render_intermanip_statistics(summaries) -> None:
+    st.subheader("ANOVA en blocs et post-hoc de Tukey")
     st.caption(
-        "Une médiane par condition et par classeur. Le test des signes bilatéral apparie les conditions "
-        "au sein de chaque classeur et écarte les égalités. La correction de Holm est appliquée séparément "
-        "aux comparaisons IP et GFP."
+        "Chaque bloc est un classeur. L’ANOVA utilise une médiane des puits par condition et par bloc. "
+        "Seuls les blocs complets pour les conditions mesurées du signal sont utilisés. "
+        "Les valeurs p de Tukey sont ajustées sur toutes les comparaisons estimables du signal."
     )
-    st.caption("Au seuil de 5 %, ce test exact requiert au moins six paires sans égalité avant correction.")
-    for label, ((start, end), data) in summaries.items():
-        st.markdown(f"**{label} · {start:g}–{end:g} min**")
-        comparisons = paired_auc_comparisons(data, reference)
-        if comparisons.empty:
-            st.info("Sélectionne une autre souche ou condition à comparer.")
+    if not summaries:
+        st.info("Aucune AUC inter-manip exploitable pour les statistiques.")
+    for label, ((start, end), blocks, biological, anova, comparisons) in summaries.items():
+        st.markdown(f"**{label} · {start:g}–{end:g} min · {blocks} blocs complets**")
+        if anova.empty:
+            st.info("Il faut au moins deux conditions mesurées et deux blocs complets.")
         else:
-            table = comparisons.rename(columns={
-                "condition": "Souche ou condition",
-                "n_pairs": "Paires biologiques",
-                "n_unequal": "Paires sans égalité",
-                "median_difference": "Écart médian apparié",
-                "p_raw": "p brute",
-                "p_holm": "p Holm",
-            })
-            html = table.to_html(index=False, classes="cytotox-plate", escape=True, border=0,
-                                 na_rep="—", float_format="{:.4g}".format)
-            st.html(f'{PLATE_STYLE}<div class="cytotox-plate-scroll">{html}</div>')
+            _render_statistics_table(anova.rename(columns={
+                "source": "Source", "df": "Degrés de liberté", "ss": "Somme des carrés",
+                "ms": "Carré moyen", "f": "F", "p": "p ANOVA",
+            }))
+            if anova["p"].isna().all():
+                st.info("La variance résiduelle est nulle. Les valeurs p ne sont pas estimables.")
 
+        if not comparisons.empty:
+            _render_statistics_table(comparisons.rename(columns={
+                "condition_a": "Condition A", "condition_b": "Condition B",
+                "difference": "Différence moyenne A − B", "p_adjusted": "p ajustée (Tukey)",
+            }))
         with st.expander(f"Médianes {label} par classeur"):
-            table = data.reset_index(names="Réplicat biologique")
-            html = table.to_html(index=False, classes="cytotox-plate", escape=True, border=0,
-                                 na_rep="—", float_format="{:.4g}".format)
-            st.html(f'{PLATE_STYLE}<div class="cytotox-plate-scroll">{html}</div>')
+            _render_statistics_table(biological.reset_index(names="Réplicat biologique"))
+
+
+def _render_statistics_table(table: pd.DataFrame) -> None:
+    html = table.to_html(index=False, classes="cytotox-plate", escape=True, border=0,
+                         na_rep="—", float_format="{:.4g}".format)
+    st.html(f'<div class="cytotox-plate-scroll">{html}</div>{PLATE_STYLE}')
+
+
+def _add_tukey_brackets(axis, groups: list[str], comparisons: pd.DataFrame) -> int:
+    positions = {name: index for index, name in enumerate(groups, start=1)}
+    intervals = []
+    annotations = []
+    for row in comparisons.itertuples(index=False):
+        stars = tukey_stars(row.p_adjusted)
+        if stars and row.condition_a in positions and row.condition_b in positions:
+            intervals.append((positions[row.condition_a], positions[row.condition_b]))
+            annotations.append(stars)
+    if not intervals:
+        return 0
+
+    levels = _bracket_levels(intervals)
+    coordinates = _bracket_draw_coordinates(intervals, levels)
+    bottom, top = axis.get_ylim()
+    step = (top - bottom) * .05
+    for (left, right), level, stars in zip(coordinates, levels, annotations):
+        y = top + step * level
+        tick = step * .25
+        axis.plot([left, left, right, right], [y - tick, y, y, y - tick], color="black", linewidth=.8)
+        axis.text((left + right) / 2, y + tick * .15, stars, ha="center", va="bottom", fontsize=9)
+    n_levels = max(levels) + 1
+    axis.set_ylim(bottom, top + step * n_levels)
+    return n_levels
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
-def _auc_boxplot_png(samples: dict[str, dict[str, pd.Series]], title: str, label: str) -> bytes:
+def _auc_boxplot_png(
+    samples: dict[str, dict[str, pd.Series]], title: str, label: str,
+    *, comparisons: pd.DataFrame | None = None,
+) -> bytes:
     figure = Figure(figsize=(max(7, len(samples) * .68), 5.3), layout="constrained")
     axis = figure.subplots()
     replicates = list(dict.fromkeys(name for groups in samples.values() for name in groups))
@@ -436,9 +460,12 @@ def _auc_boxplot_png(samples: dict[str, dict[str, pd.Series]], title: str, label
                  medianprops={"color": "black"})
     axis.set_xlim(.55, len(samples) + .55)
     axis.set_xticks(range(1, len(samples) + 1), list(samples), rotation=90, fontsize=8, parse_math=False)
-    axis.set(xlabel="Souches et conditions", ylabel=label)
+    axis.set(xlabel="Strains and conditions", ylabel=label)
     axis.set_title(title, parse_math=False)
     if combined:
         axis.axhline(1, color="0.6", linestyle=":", linewidth=1)
         figure.legend(loc="outside upper center", fontsize=8, ncols=min(3, len(labelled)), frameon=False)
+    if comparisons is not None:
+        levels = _add_tukey_brackets(axis, list(samples), comparisons)
+        figure.set_figheight(figure.get_figheight() + .2 * levels)
     return figure_bytes(figure, "png", dpi=125)
