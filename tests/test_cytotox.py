@@ -7,7 +7,9 @@ from openpyxl import Workbook
 import pandas as pd
 import pytest
 
-from luxplate.cytotox import CytotoxSignal, auc_by_well, normalize_ip, read_cytotox_workbook
+from luxplate.cytotox import (
+    CytotoxSignal, auc_by_well, common_auc_window, normalize_ip, read_cytotox_workbook, relative_auc_by_well,
+)
 from luxplate.cytotox_ui import _signal_figure, _wells_by_strain
 
 
@@ -110,6 +112,27 @@ def test_auc_uses_minutes_and_keeps_a_common_window_after_exclusions():
     auc = auc_by_well(ip)
     np.testing.assert_allclose(auc, [150, 120, np.nan, np.nan])
     assert auc_by_well(ip.iloc[[0]]).isna().all()
+
+
+def test_intermanip_auc_uses_the_common_window_and_each_workbook_reference():
+    first = pd.DataFrame(
+        {"A1": [0, 0.5, 1, 1.5], "A2": [0, 1.5, 3, 4.5], "B1": [0, 2, 4, 6]},
+        index=[0, .5, 1, 1.5],
+    )
+    second = pd.DataFrame(
+        {"A1": [0, 1.5, 2.5], "A2": [0, 4.5, 7.5], "B1": [0, 9, 15]},
+        index=[0, .75, 1.25],
+    )
+    window = common_auc_window([first, second])
+    assert window == (0, 75)
+    np.testing.assert_allclose(relative_auc_by_well(first, ["A1", "A2"], window), [.5, 1.5, 2])
+    np.testing.assert_allclose(relative_auc_by_well(second, ["A1", "A2"], window), [.5, 1.5, 3])
+
+    second.loc[1.25, "B1"] = np.nan
+    assert pd.isna(relative_auc_by_well(second, ["A1", "A2"], window)["B1"])
+    assert relative_auc_by_well(second, ["H12"], window) is None
+    assert relative_auc_by_well(first * 0, ["A1", "A2"], window) is None
+    assert common_auc_window([first, second.set_axis([2, 3, 4])]) is None
 
 
 def test_normalized_curve_keeps_individual_wells_and_exclusion_gaps():

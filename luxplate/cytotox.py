@@ -1,6 +1,7 @@
 """Import Cytotox workbooks and prepare their normalized signals."""
 
 from dataclasses import dataclass
+from collections.abc import Sequence
 from io import BytesIO
 from math import isfinite
 import re
@@ -19,6 +20,7 @@ PLATE_ROWS = tuple("ABCDEFGH")
 PLATE_COLUMNS = tuple(range(1, 13))
 WELL_PATTERN = re.compile(r"([A-H])0?([1-9]|1[0-2])")
 TIME_HEADERS = {"elapsed", "elapsed (h)", "temps (h)", "temps_h"}
+REFERENCE_STRAIN = "14.1Ac"
 
 
 @dataclass
@@ -58,6 +60,43 @@ def auc_by_well(data: pd.DataFrame) -> pd.Series:
     for well in endpoints[endpoints].index:
         auc.loc[well] = calculate_auc(data.index * 60, data[well])
     return auc
+
+
+def common_auc_window(series: Sequence[pd.DataFrame]) -> tuple[float, float] | None:
+    """Return the overlap in measured minutes, calculated separately per signal."""
+    if not series or any(len(data.index) < 2 for data in series):
+        return None
+    start = float(max(data.index[0] for data in series) * 60)
+    end = float(min(data.index[-1] for data in series) * 60)
+    return (start, end) if start < end else None
+
+
+def relative_auc_by_well(
+    data: pd.DataFrame, reference_wells: Sequence[str], window: tuple[float, float],
+) -> pd.Series | None:
+    """Integrate over the common window and divide each well by its local reference median."""
+    start, end = window
+    data = data.set_axis(data.index * 60, axis="index")
+    auc = pd.Series(np.nan, index=data.columns, dtype=float)
+    for well, values in data.items():
+        # An excluded measurement exactly at a boundary remains missing.
+        # Interpolate only if that time was not on this workbook's grid.
+        if any(bound in values.index and pd.isna(values.loc[bound]) for bound in window):
+            continue
+        observed = values.dropna()
+        if observed.empty or observed.index[0] > start or observed.index[-1] < end:
+            continue
+        interior = observed.loc[(observed.index > start) & (observed.index < end)]
+        first, last = np.interp(window, observed.index, observed.to_numpy())
+        auc.loc[well] = calculate_auc([start, *interior.index, end], [first, *interior, last])
+
+    reference = auc.reindex(reference_wells).dropna()
+    if reference.empty:
+        return None
+    median = reference.median()
+    if not isfinite(median) or median == 0:
+        return None
+    return (auc / median).replace([np.inf, -np.inf], np.nan)
 
 
 def _read_plate(sheet) -> pd.DataFrame:
