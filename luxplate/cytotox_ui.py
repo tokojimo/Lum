@@ -17,6 +17,7 @@ from .cytotox import (
     normalize_ip, read_cytotox_workbook, relative_auc_by_well,
 )
 from .cytotox_grid import review_exclusions
+from .cytotox_statistics import biological_auc_medians, paired_auc_comparisons
 from .display_order import reconcile_display_order
 from .export import figure_bytes
 
@@ -315,33 +316,89 @@ def _render_intermanip_results(
     completed: list[tuple[str, dict[str, list[str]], list[str], tuple[CytotoxSignal, ...]]],
     ordered: list[str],
 ) -> None:
-    st.caption(
-        f"Chaque point est l’AUC d’un puits divisée par la médiane des AUC de {REFERENCE_STRAIN} "
-        "du même classeur. Chaque couleur identifie un réplicat biologique."
-    )
-    for signal_index, label in ((1, "IP"), (0, "GFP")):
-        st.subheader(f"AUC {label} normalisé inter-manip")
-        window = common_auc_window([signals[signal_index].data for _, _, _, signals in completed])
-        if window is None:
-            st.info("Aucune fenêtre mesurée commune pour ce signal.")
-            continue
-        start, end = window
-        st.caption(f"Fenêtre commune aux mesures conservées · {start:g}–{end:g} min.")
-        samples: dict[str, dict[str, pd.Series]] = {strain: {} for strain in ordered}
-        for name, wells, reference_wells, signals in completed:
-            ratios = relative_auc_by_well(signals[signal_index].data, reference_wells, window)
-            if ratios is None:
-                st.warning(f"{name} : médiane de référence {REFERENCE_STRAIN} indisponible ou nulle pour {label}.")
-                ratios = pd.Series(dtype=float)
-            for strain in ordered:
-                samples[strain][name] = ratios.reindex(wells.get(strain, [])).dropna()
+    boxplots, statistics = st.tabs(["Box plots", "Statistiques"])
+    summaries: dict[str, tuple[tuple[float, float], pd.DataFrame]] = {}
+    conditions = list(dict.fromkeys([*ordered, REFERENCE_STRAIN]))
+    with boxplots:
+        st.caption(
+            f"Chaque point est l’AUC d’un puits divisée par la médiane des AUC de {REFERENCE_STRAIN} "
+            "du même classeur. Chaque couleur identifie un réplicat biologique."
+        )
+        for signal_index, label in ((1, "IP"), (0, "GFP")):
+            st.subheader(f"AUC {label} normalisé inter-manip")
+            window = common_auc_window([signals[signal_index].data for _, _, _, signals in completed])
+            if window is None:
+                st.info("Aucune fenêtre mesurée commune pour ce signal.")
+                continue
+            start, end = window
+            st.caption(f"Fenêtre commune aux mesures conservées · {start:g}–{end:g} min.")
+            samples: dict[str, dict[str, pd.Series]] = {strain: {} for strain in conditions}
+            for name, wells, reference_wells, signals in completed:
+                ratios = relative_auc_by_well(signals[signal_index].data, reference_wells, window)
+                if ratios is None:
+                    st.warning(f"{name} · médiane de référence {REFERENCE_STRAIN} indisponible ou nulle pour {label}.")
+                    ratios = pd.Series(dtype=float)
+                for strain in conditions:
+                    group = reference_wells if strain == REFERENCE_STRAIN else wells.get(strain, [])
+                    samples[strain][name] = ratios.reindex(group).dropna()
 
-        if all(values.empty for groups in samples.values() for values in groups.values()):
-            st.info("Aucun puits exploitable pour cette comparaison.")
-            continue
-        st.image(_auc_boxplot_png(
-            samples, f"AUC {label} inter-manip ({start:g}–{end:g} min)", f"AUC {label} / médiane {REFERENCE_STRAIN}",
-        ))
+            summaries[label] = (window, biological_auc_medians(samples))
+            displayed = {strain: samples[strain] for strain in ordered}
+            if all(values.empty for groups in displayed.values() for values in groups.values()):
+                st.info("Aucun puits exploitable pour cette comparaison.")
+                continue
+            st.image(_auc_boxplot_png(
+                displayed, f"AUC {label} inter-manip ({start:g}–{end:g} min)", f"AUC {label} / médiane {REFERENCE_STRAIN}",
+            ))
+
+    with statistics:
+        _render_intermanip_statistics(summaries)
+
+
+def _render_intermanip_statistics(
+    summaries: dict[str, tuple[tuple[float, float], pd.DataFrame]],
+) -> None:
+    st.subheader("Statistiques des AUC inter-manip")
+    available = list(dict.fromkeys(
+        condition for _, data in summaries.values() for condition in data.columns[data.notna().any()]
+    ))
+    if not available:
+        st.info("Aucune AUC inter-manip exploitable pour les statistiques.")
+        return
+    reference = st.selectbox(
+        "Condition de comparaison", available,
+        index=available.index(REFERENCE_STRAIN) if REFERENCE_STRAIN in available else 0,
+        key="cytotox_statistics_reference",
+    )
+    st.caption(
+        "Une médiane par condition et par classeur. Le test des signes bilatéral apparie les conditions "
+        "au sein de chaque classeur et écarte les égalités. La correction de Holm est appliquée séparément "
+        "aux comparaisons IP et GFP."
+    )
+    st.caption("Au seuil de 5 %, ce test exact requiert au moins six paires sans égalité avant correction.")
+    for label, ((start, end), data) in summaries.items():
+        st.markdown(f"**{label} · {start:g}–{end:g} min**")
+        comparisons = paired_auc_comparisons(data, reference)
+        if comparisons.empty:
+            st.info("Sélectionne une autre souche ou condition à comparer.")
+        else:
+            table = comparisons.rename(columns={
+                "condition": "Souche ou condition",
+                "n_pairs": "Paires biologiques",
+                "n_unequal": "Paires sans égalité",
+                "median_difference": "Écart médian apparié",
+                "p_raw": "p brute",
+                "p_holm": "p Holm",
+            })
+            html = table.to_html(index=False, classes="cytotox-plate", escape=True, border=0,
+                                 na_rep="—", float_format="{:.4g}".format)
+            st.html(f'{PLATE_STYLE}<div class="cytotox-plate-scroll">{html}</div>')
+
+        with st.expander(f"Médianes {label} par classeur"):
+            table = data.reset_index(names="Réplicat biologique")
+            html = table.to_html(index=False, classes="cytotox-plate", escape=True, border=0,
+                                 na_rep="—", float_format="{:.4g}".format)
+            st.html(f'{PLATE_STYLE}<div class="cytotox-plate-scroll">{html}</div>')
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
