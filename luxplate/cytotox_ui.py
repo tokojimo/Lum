@@ -323,6 +323,10 @@ def _render_intermanip_results(
     boxplots, statistics = st.tabs(["Box plots", "Statistiques"])
     summaries = {}
     with boxplots:
+        show_significance = st.checkbox(
+            "Afficher les traits et les étoiles de Tukey", value=True,
+            key="cytotox_intermanip_show_significance",
+        )
         st.caption(
             f"Chaque point est l’AUC d’un puits divisée par la médiane des AUC de {REFERENCE_STRAIN} "
             "du même classeur. Chaque couleur identifie un réplicat biologique."
@@ -353,7 +357,8 @@ def _render_intermanip_results(
                 continue
             st.image(_auc_boxplot_png(
                 samples, f"{label} AUC across experiments ({start:g}–{end:g} min)",
-                f"{label} AUC / {REFERENCE_STRAIN} median", comparisons=comparisons,
+                f"{label} AUC / {REFERENCE_STRAIN} median",
+                comparisons=comparisons if show_significance else None,
             ))
 
     with statistics:
