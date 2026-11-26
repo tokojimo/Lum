@@ -81,13 +81,14 @@ def render_cytotox() -> None:
             if strain:
                 wells_by_strain.setdefault(strain, []).append(f"{row}{column}")
 
-    with st.expander("Plan de plaque · 96 puits"):
-        st.dataframe(workbook.plate.rename(columns=str), use_container_width=True)
-
     selected = st.multiselect(
         "Souches et conditions à afficher", sorted(wells_by_strain, key=str.casefold),
         key=f"cytotox_strains_{hashlib.sha256(payload).hexdigest()}",
     )
+    with st.expander("Plan de plaque · 96 puits", expanded=not selected):
+        plate_html = workbook.plate.rename_axis("Puits").to_html(escape=True, border=0)
+        st.html(f'<div style="overflow-x: auto">{plate_html}</div>')
+
     if not selected:
         return
 
