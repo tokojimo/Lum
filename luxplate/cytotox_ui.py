@@ -1,103 +1,158 @@
 """Streamlit interface for inspecting Cytotox measurements by strain."""
 
-import hashlib
+from pathlib import Path
 from textwrap import fill
 
 from matplotlib import colormaps
 from matplotlib.figure import Figure
+import pandas as pd
 import streamlit as st
 
-from .cytotox import CytotoxSignal, read_cytotox_workbook
+from .cytotox import CytotoxSignal, CytotoxWorkbook, read_cytotox_workbook
+from .export import figure_bytes
+
+
+PLATE_STYLE = """
+<style>
+.cytotox-plate-scroll { overflow-x: auto; }
+.cytotox-plate-scroll .cytotox-plate {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+.cytotox-plate-scroll .cytotox-plate th,
+.cytotox-plate-scroll .cytotox-plate td {
+    border: 1px solid rgba(128, 128, 128, 0.5);
+    padding: 0.25rem 0.35rem;
+    text-align: center;
+}
+.cytotox-plate-scroll .cytotox-plate th {
+    background: rgba(128, 128, 128, 0.12);
+}
+</style>
+"""
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def _cached_workbook(payload: bytes):
+def _cached_workbook(payload: bytes) -> CytotoxWorkbook:
     return read_cytotox_workbook(payload)
 
 
-def _signal_figure(
-    signal: CytotoxSignal, wells_by_strain: dict[str, list[str]], selected: list[str]
-) -> tuple[Figure, list[str]]:
-    palette = colormaps["tab20"].colors
-    styles = ("-", "--", "-.", ":")
-    figure = Figure(figsize=(10, 4), layout="constrained")
-    axis = figure.subplots()
-    missing = []
-    handles = []
-    labels = []
+def _wells_by_strain(plate: pd.DataFrame) -> dict[str, list[str]]:
+    """Keep the plate order, reading each column from A to H."""
+    grouped: dict[str, list[str]] = {}
+    for column, labels in plate.items():
+        for row, strain in labels.items():
+            if strain:
+                grouped.setdefault(strain, []).append(f"{row}{column}")
+    return grouped
 
-    for index, strain in enumerate(selected):
-        drawn = False
-        for well in wells_by_strain[strain]:
+
+def _raw_figure(
+    signal: CytotoxSignal, wells_by_strain: dict[str, list[str]], title: str,
+) -> Figure:
+    """Plot one panel per selected strain, with the original values from each well."""
+    columns = min(4, len(wells_by_strain))
+    rows = (len(wells_by_strain) + columns - 1) // columns
+    palette = colormaps["tab10"].colors
+    styles = ("-", "--", "-.", ":")
+    figure = Figure(figsize=(4 * columns, 2.2 * rows + 1.2), layout="constrained")
+    axes = figure.subplots(rows, columns, sharex=True, sharey=True, squeeze=False)
+    figure.suptitle(title, fontsize=14, parse_math=False)
+    time_min = signal.data.index * 60
+    replicate_lines = {}
+    lowest_value = float("inf")
+
+    for index, (strain, wells) in enumerate(wells_by_strain.items()):
+        row, column = divmod(index, columns)
+        axis = axes[row, column]
+        for replicate, well in enumerate(wells, start=1):
             if well not in signal.data:
                 continue
-            readings = signal.data[well]
-            measured_count = readings.count()
-            if not measured_count:
+            values = signal.data[well]
+            if values.isna().all():
                 continue
-            (curve,) = axis.plot(
-                readings.index, readings,
-                color=palette[index % len(palette)], linestyle=styles[index // len(palette) % len(styles)],
-                marker="." if measured_count == 1 else None,
-                alpha=0.8,
+            lowest_value = min(lowest_value, values.min())
+            (line,) = axis.plot(
+                time_min, values, color=palette[(replicate - 1) % len(palette)],
+                linestyle=styles[((replicate - 1) // len(palette)) % len(styles)],
+                marker="o", markersize=2.4, linewidth=1.15, label=f"Rep {replicate}",
             )
-            if not drawn:
-                handles.append(curve)
-                labels.append(fill(strain, width=30))
-                drawn = True
-        if not drawn:
-            missing.append(strain)
+            replicate_lines.setdefault(replicate, line)
 
-    axis.set(xlabel="Temps (h)", ylabel=signal.metric)
-    axis.grid(axis="y", alpha=0.25)
-    if handles:
-        columns = min(3, len(handles))
-        legend_rows = (len(handles) + columns - 1) // columns
-        figure.set_figheight(4 + 0.42 * legend_rows)
-        figure.legend(handles, labels, ncols=columns, loc="outside lower center")
-    return figure, missing
+        if not axis.lines:
+            axis.text(0.5, 0.5, "Aucune mesure", transform=axis.transAxes, ha="center", va="center")
+        axis.set_title(fill(strain, width=39), fontsize=10, parse_math=False)
+        axis.tick_params(labelsize=8, labelbottom=True, labelleft=True)
+        axis.grid(True, alpha=0.22)
+        axis.set_axisbelow(True)
+        if column == 0:
+            axis.set_ylabel(fill(signal.metric, width=24), fontsize=9, parse_math=False)
+        if index + columns >= len(wells_by_strain):
+            axis.set_xlabel("Temps (min)", fontsize=9)
+
+    for axis in axes.flat[len(wells_by_strain):]:
+        axis.set_visible(False)
+    if replicate_lines:
+        if lowest_value >= 0:
+            axes[0, 0].set_ylim(bottom=0)
+        handles = [replicate_lines[key] for key in sorted(replicate_lines)]
+        figure.legend(
+            handles=handles, loc="outside lower center", title="Répétition technique",
+            ncols=min(6, len(handles)), fontsize=9, frameon=False,
+        )
+    return figure
+
+
+@st.cache_data(show_spinner="Préparation des courbes brutes…", max_entries=24)
+def _raw_figure_png(
+    signal: CytotoxSignal, wells_by_strain: dict[str, list[str]], title: str,
+) -> bytes:
+    return figure_bytes(_raw_figure(signal, wells_by_strain, title), "png", dpi=125)
 
 
 def render_cytotox() -> None:
     st.header("Analyse Cytotox")
-    upload = st.file_uploader(
-        "Déposer un classeur Cytotox (.xlsx ou .xlsm)",
-        type=["xlsx", "xlsm"], key="cytotox_workbook",
+    uploads = st.file_uploader(
+        "Déposer un ou plusieurs classeurs Cytotox (.xlsx ou .xlsm)",
+        type=["xlsx", "xlsm"], accept_multiple_files=True, key="cytotox_workbooks",
         help="Ordre des feuilles : GFP, IP, courbes finales GFP, plan de plaque 96 puits.",
     )
-    if upload is None:
+
+    imports = []
+    for upload in uploads:
+        try:
+            workbook = _cached_workbook(upload.getvalue())
+        except ValueError as error:
+            st.error(f"Import impossible pour « {upload.name} » : {error}")
+            continue
+        imports.append((upload.name, workbook, _wells_by_strain(workbook.plate)))
+
+    if not imports:
         return
 
-    payload = upload.getvalue()
-    try:
-        workbook = _cached_workbook(payload)
-    except ValueError as error:
-        st.error(f"Import Cytotox impossible : {error}")
-        return
+    options = list(dict.fromkeys(strain for _, _, groups in imports for strain in groups))
+    selection_key = "cytotox_selected_strains"
+    previous = st.session_state.get(selection_key, [])
+    valid = [strain for strain in previous if strain in options]
+    if st.button("All", key="cytotox_select_all", help="Sélectionner toutes les souches et conditions"):
+        st.session_state[selection_key] = options
+    elif previous != valid:
+        st.session_state[selection_key] = valid
+    selected = set(st.multiselect("Souches et conditions à analyser", options, key=selection_key))
 
-    wells_by_strain: dict[str, list[str]] = {}
-    for row, labels in workbook.plate.iterrows():
-        for column, strain in labels.items():
-            if strain:
-                wells_by_strain.setdefault(strain, []).append(f"{row}{column}")
+    for filename, workbook, wells in imports:
+        st.subheader(filename)
+        with st.expander("Plan de plaque · 96 puits", expanded=len(imports) == 1 and not selected):
+            plate_html = workbook.plate.to_html(classes="cytotox-plate", escape=True, border=0)
+            st.html(f'{PLATE_STYLE}<div class="cytotox-plate-scroll">{plate_html}</div>')
 
-    selected = st.multiselect(
-        "Souches et conditions à afficher", sorted(wells_by_strain, key=str.casefold),
-        key=f"cytotox_strains_{hashlib.sha256(payload).hexdigest()}",
-    )
-    with st.expander("Plan de plaque · 96 puits", expanded=not selected):
-        plate_html = workbook.plate.rename_axis("Puits").to_html(escape=True, border=0)
-        st.html(f'<div style="overflow-x: auto">{plate_html}</div>')
+        if not selected:
+            continue
+        selected_wells = {strain: group for strain, group in wells.items() if strain in selected}
+        if not selected_wells:
+            st.info("Aucune des souches sélectionnées ne figure sur cette plaque.")
+            continue
 
-    if not selected:
-        return
-
-    st.caption("Chaque trait représente un puits. Les puits d’une même souche ont la même couleur.")
-    for signal in workbook.signals:
-        st.subheader(signal.name)
-        st.caption(f"Feuille Excel « {signal.sheet_name.strip()} »")
-        figure, missing = _signal_figure(signal, wells_by_strain, selected)
-        if len(missing) < len(selected):
-            st.pyplot(figure, use_container_width=True)
-        if missing:
-            st.info(f"Aucune mesure dans cette feuille pour {', '.join(missing)}.")
+        for title, signal in zip(("GFP raw", "IP raw"), workbook.signals[:2]):
+            st.image(_raw_figure_png(signal, selected_wells, f"{Path(filename).stem} — {title}"))
