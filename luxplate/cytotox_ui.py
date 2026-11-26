@@ -1,6 +1,7 @@
 """Streamlit interface for inspecting Cytotox measurements by strain."""
 
 from pathlib import Path
+from contextlib import nullcontext
 from hashlib import sha256
 from textwrap import fill
 
@@ -165,44 +166,63 @@ def render_cytotox() -> None:
     if ordered:
         st.session_state[order_key] = ordered
 
+    multiple_files = len(imports) > 1
     participating = sum(any(strain in wells for strain in ordered) for _, _, _, wells in imports)
     compare = participating > 1
+    workbook_labels = [f"{number} · {filename}" for number, (_, filename, _, _) in enumerate(imports, 1)]
+    if multiple_files:
+        st.caption("Ouvre l’onglet de chaque classeur pour valider sa période IP et ses exclusions.")
+        panels = st.tabs(workbook_labels + (["Synthèse inter-manip"] if compare else []))
+    else:
+        panels = [st.container()]
+
     completed = []
+    pending = []
     for number, (file_id, filename, workbook, wells) in enumerate(imports, start=1):
-        st.subheader(filename)
-        with st.expander("Plan de plaque · 96 puits", expanded=len(imports) == 1 and not selected):
-            plate_html = workbook.plate.to_html(classes="cytotox-plate", escape=True, border=0)
-            st.html(f'{PLATE_STYLE}<div class="cytotox-plate-scroll">{plate_html}</div>')
+        with panels[number - 1]:
+            st.subheader(filename)
+            with st.expander("Plan de plaque · 96 puits", expanded=not multiple_files and not selected):
+                plate_html = workbook.plate.to_html(classes="cytotox-plate", escape=True, border=0)
+                st.html(f'{PLATE_STYLE}<div class="cytotox-plate-scroll">{plate_html}</div>')
 
-        if not selected:
-            continue
-        selected_wells = {strain: wells[strain] for strain in ordered if strain in wells}
-        if not selected_wells:
-            st.info("Aucune des souches sélectionnées ne figure sur cette plaque.")
-            continue
+            if not selected:
+                continue
+            selected_wells = {strain: wells[strain] for strain in ordered if strain in wells}
+            if not selected_wells:
+                st.info("Aucune des souches sélectionnées ne figure sur cette plaque.")
+                continue
 
-        figure_title = Path(filename).stem
-        for title, signal in zip(("GFP raw", "IP raw"), workbook.signals[:2]):
-            st.image(_signal_figure_png(signal, selected_wells, f"{figure_title} — {title}"))
-        reference_wells = wells.get(REFERENCE_STRAIN, []) if compare else []
-        signals = _render_normalized(
-            file_id, figure_title, workbook, selected_wells, reference_wells=reference_wells,
-        )
-        if signals is not None:
-            completed.append((f"Rép. biologique {number} · {filename}", selected_wells, reference_wells, signals))
+            figure_title = Path(filename).stem
+            raw_figures = st.expander("Courbes brutes GFP et IP") if multiple_files else nullcontext()
+            with raw_figures:
+                for title, signal in zip(("GFP raw", "IP raw"), workbook.signals[:2]):
+                    st.image(_signal_figure_png(signal, selected_wells, f"{figure_title} — {title}"))
+            reference_wells = wells.get(REFERENCE_STRAIN, []) if compare else []
+            signals, action = _render_normalized(
+                file_id, figure_title, workbook, selected_wells,
+                reference_wells=reference_wells, compact=multiple_files,
+            )
+            if signals is not None:
+                completed.append((f"Rép. biologique {number} · {filename}", selected_wells, reference_wells, signals))
+            else:
+                pending.append(f"{workbook_labels[number - 1]} · {action}")
 
     if compare:
-        st.header("Synthèse inter-manip")
-        if len(completed) < participating:
-            st.info("Validez la période IP et les exclusions de chaque classeur concerné pour afficher la synthèse.")
-        else:
-            _render_intermanip_results(completed, ordered)
+        with panels[-1]:
+            st.header("Synthèse inter-manip")
+            if pending:
+                st.info(f"{len(completed)} classeur(s) sur {participating} validé(s).")
+                for status in pending:
+                    st.text(status)
+                st.caption("Clique sur « Valider les exclusions » même si tu ne coches aucun point.")
+            else:
+                _render_intermanip_results(completed, ordered)
 
 
 def _render_normalized(
     file_id: str, title: str, workbook: CytotoxWorkbook, selected_wells: dict[str, list[str]],
-    *, reference_wells: list[str],
-) -> tuple[CytotoxSignal, ...] | None:
+    *, reference_wells: list[str], compact: bool = False,
+) -> tuple[tuple[CytotoxSignal, ...] | None, str]:
     gfp, ip, gfp_final = workbook.signals
     last_minute = max(0.0, float(ip.data.index.max() * 60))
     cutoff_key = f"cytotox_ip_validated_end_{file_id}"
@@ -216,13 +236,13 @@ def _render_normalized(
 
     end_minutes = st.session_state.get(cutoff_key)
     if end_minutes is None:
-        return
+        return None, "Période IP à valider"
 
     try:
         ip_data = normalize_ip(gfp.data, ip.data, end_minutes)
     except ValueError as error:
         st.error(str(error))
-        return
+        return None, "Normalisation IP indisponible"
 
     wells = set(reference_wells).union(well for group in selected_wells.values() for well in group)
     ip_data = ip_data.loc[:, ip_data.columns.isin(wells)]
@@ -254,12 +274,14 @@ def _render_normalized(
         filtered, excluded_count, confirmed = review_exclusions(signals, file_id=file_id)
         if not confirmed:
             with figures:
-                for signal in filtered:
-                    st.image(_signal_figure_png(signal, selected_wells, f"{title} — {signal.name}"))
-            return
+                preview = st.expander("Aperçu des courbes normalisées") if compact else nullcontext()
+                with preview:
+                    for signal in filtered:
+                        st.image(_signal_figure_png(signal, selected_wells, f"{title} — {signal.name}"))
+            return None, "Exclusions à valider"
         st.caption(f"Points exclus des courbes normalisées : {excluded_count}")
         _render_final_results(title, filtered, selected_wells)
-        return filtered
+        return filtered, ""
 
 
 def _render_final_results(
