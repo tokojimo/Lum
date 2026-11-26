@@ -6,8 +6,8 @@ import numpy as np
 from openpyxl import Workbook
 import pytest
 
-from luxplate.cytotox import read_cytotox_workbook
-from luxplate.cytotox_ui import _raw_figure, _wells_by_strain
+from luxplate.cytotox import normalize_ip, read_cytotox_workbook
+from luxplate.cytotox_ui import _signal_figure, _wells_by_strain
 
 
 @pytest.fixture
@@ -70,7 +70,7 @@ def test_raw_panels_show_each_well_with_shared_replicate_colors_and_minutes(work
     result = _read(workbook)
     groups = _wells_by_strain(result.plate)
     selected = {strain: wells for strain, wells in groups.items() if strain != "None"}
-    figure = _raw_figure(result.signals[0], selected, "Essai — GFP raw")
+    figure = _signal_figure(result.signals[0], selected, "Essai — GFP raw")
     first, second = figure.axes
     assert [axis.get_title() for axis in figure.axes] == ["Souche Δ", "Autre souche"]
     assert [line.get_label() for line in first.lines] == ["Rep 1", "Rep 2"]
@@ -78,3 +78,24 @@ def test_raw_panels_show_each_well_with_shared_replicate_colors_and_minutes(work
     np.testing.assert_array_equal(first.lines[1].get_xdata(), [0, 30])
     np.testing.assert_array_equal(first.lines[1].get_ydata(), [20, 22])
     assert first.get_shared_y_axes().joined(first, second)
+
+
+def test_ip_normalization_aligns_wells_and_keeps_the_cutoff_inclusive(workbook):
+    workbook["GFP"]["D3"] = 0
+    workbook["IP"].append([0.5, 31, 50])
+    workbook["IP"].append([1, 41, 55])
+    workbook["IP"].append([1.5, 51, 60])
+    gfp, ip, final_gfp = _read(workbook).signals
+    normalized = normalize_ip(gfp.data, ip.data[["A2", "A1"]], 60)
+    assert normalized.index.tolist() == [0, 0.5, 1]
+    assert normalized.columns.tolist() == ["A2", "A1"]
+    np.testing.assert_array_equal(normalized["A1"], [0, 1, 2])
+    assert normalized["A2"].isna().all()
+    assert ip.data.loc[1.5, "A1"] == 51
+    assert final_gfp.data.loc[0.5, "A1"] == -0.01
+
+
+def test_ip_normalization_requires_time_zero_in_both_sheets(workbook):
+    gfp, ip, _ = _read(workbook).signals
+    with pytest.raises(ValueError, match="t = 0"):
+        normalize_ip(gfp.data.drop(index=0), ip.data, 1200)

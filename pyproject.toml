@@ -15,4 +15,4 @@ addopts = "-ra"
 pythonpath = ["."]
 
 [tool.setuptools.package-data]
-luxplate = ["resources/crosstalk/MAURI_E06_BEST/*"]
+luxplate = ["resources/crosstalk/MAURI_E06_BEST/*", "resources/cytotox_grid/index.html"]

@@ -8,7 +8,8 @@ from matplotlib.figure import Figure
 import pandas as pd
 import streamlit as st
 
-from .cytotox import CytotoxSignal, CytotoxWorkbook, read_cytotox_workbook
+from .cytotox import CytotoxSignal, CytotoxWorkbook, normalize_ip, read_cytotox_workbook
+from .cytotox_grid import review_exclusions
 from .export import figure_bytes
 
 
@@ -48,10 +49,10 @@ def _wells_by_strain(plate: pd.DataFrame) -> dict[str, list[str]]:
     return grouped
 
 
-def _raw_figure(
+def _signal_figure(
     signal: CytotoxSignal, wells_by_strain: dict[str, list[str]], title: str,
 ) -> Figure:
-    """Plot one panel per selected strain, with the original values from each well."""
+    """Plot one panel per selected strain, with one curve per well."""
     columns = min(4, len(wells_by_strain))
     rows = (len(wells_by_strain) + columns - 1) // columns
     palette = colormaps["tab10"].colors
@@ -104,11 +105,11 @@ def _raw_figure(
     return figure
 
 
-@st.cache_data(show_spinner="Préparation des courbes brutes…", max_entries=24)
-def _raw_figure_png(
+@st.cache_data(show_spinner="Préparation des courbes…", max_entries=24)
+def _signal_figure_png(
     signal: CytotoxSignal, wells_by_strain: dict[str, list[str]], title: str,
 ) -> bytes:
-    return figure_bytes(_raw_figure(signal, wells_by_strain, title), "png", dpi=125)
+    return figure_bytes(_signal_figure(signal, wells_by_strain, title), "png", dpi=125)
 
 
 def render_cytotox() -> None:
@@ -126,12 +127,12 @@ def render_cytotox() -> None:
         except ValueError as error:
             st.error(f"Import impossible pour « {upload.name} » : {error}")
             continue
-        imports.append((upload.name, workbook, _wells_by_strain(workbook.plate)))
+        imports.append((upload.file_id, upload.name, workbook, _wells_by_strain(workbook.plate)))
 
     if not imports:
         return
 
-    options = list(dict.fromkeys(strain for _, _, groups in imports for strain in groups))
+    options = list(dict.fromkeys(strain for _, _, _, groups in imports for strain in groups))
     selection_key = "cytotox_selected_strains"
     previous = st.session_state.get(selection_key, [])
     valid = [strain for strain in previous if strain in options]
@@ -139,9 +140,14 @@ def render_cytotox() -> None:
         st.session_state[selection_key] = options
     elif previous != valid:
         st.session_state[selection_key] = valid
-    selected = set(st.multiselect("Souches et conditions à analyser", options, key=selection_key))
+    validated_key = "cytotox_validated_strains"
+    with st.form("cytotox_strain_selection"):
+        draft = st.multiselect("Souches et conditions à analyser", options, key=selection_key)
+        if st.form_submit_button("Valider les souches et conditions"):
+            st.session_state[validated_key] = draft
+    selected = set(st.session_state.get(validated_key, ())).intersection(options)
 
-    for filename, workbook, wells in imports:
+    for file_id, filename, workbook, wells in imports:
         st.subheader(filename)
         with st.expander("Plan de plaque · 96 puits", expanded=len(imports) == 1 and not selected):
             plate_html = workbook.plate.to_html(classes="cytotox-plate", escape=True, border=0)
@@ -154,5 +160,61 @@ def render_cytotox() -> None:
             st.info("Aucune des souches sélectionnées ne figure sur cette plaque.")
             continue
 
+        figure_title = Path(filename).stem
         for title, signal in zip(("GFP raw", "IP raw"), workbook.signals[:2]):
-            st.image(_raw_figure_png(signal, selected_wells, f"{Path(filename).stem} — {title}"))
+            st.image(_signal_figure_png(signal, selected_wells, f"{figure_title} — {title}"))
+        _render_normalized(file_id, figure_title, workbook, selected_wells)
+
+
+def _render_normalized(
+    file_id: str, title: str, workbook: CytotoxWorkbook, selected_wells: dict[str, list[str]],
+) -> None:
+    gfp, ip, gfp_final = workbook.signals
+    last_minute = max(0.0, float(ip.data.index.max() * 60))
+    cutoff_key = f"cytotox_ip_validated_end_{file_id}"
+    with st.form(key=f"cytotox_ip_window_{file_id}"):
+        draft_end = st.number_input(
+            "Temps maximal pour l’IP (min)", min_value=0.0, max_value=last_minute,
+            value=min(1200.0, last_minute), step=1.0,
+        )
+        if st.form_submit_button("Valider la période IP"):
+            st.session_state[cutoff_key] = draft_end
+
+    end_minutes = st.session_state.get(cutoff_key)
+    if end_minutes is None:
+        return
+
+    try:
+        ip_data = normalize_ip(gfp.data, ip.data, end_minutes)
+    except ValueError as error:
+        st.error(str(error))
+        return
+
+    wells = {well for group in selected_wells.values() for well in group}
+    ip_data = ip_data.loc[:, ip_data.columns.isin(wells)]
+    gfp_data = gfp_final.data.loc[:, gfp_final.data.columns.isin(wells)]
+    missing_baseline = ip.data.loc[0].reindex(ip_data.columns).isna() | (
+        gfp.data.loc[0].reindex(ip_data.columns).fillna(0).eq(0)
+    )
+    if missing_baseline.any():
+        st.warning(
+            "IP normalisé indisponible pour les puits dont IP à t = 0 est manquant "
+            "ou GFP à t = 0 est nul ou manquant : " + ", ".join(missing_baseline[missing_baseline].index)
+        )
+
+    signals = (
+        CytotoxSignal("GFP normalisé", gfp_final.sheet_name, "GFP normalisé", gfp_data),
+        CytotoxSignal("IP normalisé", ip.sheet_name, "IP normalisé", ip_data),
+    )
+    with st.container():
+        st.subheader("Courbes normalisées")
+        st.caption(f"GFP repris de « {gfp_final.sheet_name.strip()} ». IP calculé jusqu’à {end_minutes:g} min inclus.")
+        figures = st.container()
+        st.subheader("Points à exclure")
+        st.caption("Cliquez sur les cellules à exclure. Un second clic les décoche.")
+        filtered, excluded_count = review_exclusions(signals, file_id=file_id)
+        if excluded_count:
+            st.caption(f"Points exclus des courbes normalisées : {excluded_count}")
+        with figures:
+            for signal in filtered:
+                st.image(_signal_figure_png(signal, selected_wells, f"{title} — {signal.name}"))
