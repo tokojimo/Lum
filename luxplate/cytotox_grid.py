@@ -40,11 +40,12 @@ def _table(signal: CytotoxSignal) -> tuple[dict, dict[str, tuple[int, int]]]:
 
 def review_exclusions(
     signals: tuple[CytotoxSignal, CytotoxSignal], *, file_id: str,
-) -> tuple[tuple[CytotoxSignal, ...], int]:
+) -> tuple[tuple[CytotoxSignal, ...], int, bool]:
     """Apply only a submitted grid selection and keep measurements in the grid."""
     tables, locations = zip(*(_table(signal) for signal in signals))
     config = sha256(repr([(table["wells"], table["keys"]) for table in tables]).encode()).hexdigest()
     state_key = f"cytotox_exclusions_{file_id}"
+    confirmed_key = f"{state_key}_confirmed"
     saved, last_event = st.session_state.get(state_key, ((set(), set()), None))
     packet = _grid(
         tables=tables,
@@ -68,6 +69,7 @@ def review_exclusions(
                 for previous, new, cells in zip(saved, points, locations)
             )
             st.session_state[state_key] = (saved, packet["event"])
+            st.session_state[confirmed_key] = config
 
     result = []
     count = 0
@@ -77,4 +79,4 @@ def review_exclusions(
             data.iat[cells[point]] = np.nan
             count += 1
         result.append(replace(signal, data=data))
-    return tuple(result), count
+    return tuple(result), count, st.session_state.get(confirmed_key) == config
