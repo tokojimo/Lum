@@ -50,25 +50,24 @@ def normalize_ip(gfp: pd.DataFrame, ip: pd.DataFrame, end_minutes: float) -> pd.
 
 
 def auc_by_well(data: pd.DataFrame) -> pd.Series:
-    """Integrate filtered measurements in minutes over the same measured interval for every well."""
-    auc = pd.Series(np.nan, index=data.columns, dtype=float)
-    if len(data.index) < 2:
-        return auc
-    # A missing endpoint would shorten the window for this well. Interior
-    # gaps are handled by the shared trapezoidal integration.
-    endpoints = data.iloc[[0, -1]].notna().all()
-    for well in endpoints[endpoints].index:
-        auc.loc[well] = calculate_auc(data.index * 60, data[well])
-    return auc
+    """Integrate each well in minutes over its retained observations."""
+    time_minutes = data.index * 60
+    return pd.Series(
+        [calculate_auc(time_minutes, values) for _, values in data.items()],
+        index=data.columns, dtype=float,
+    )
 
 
 def common_auc_window(series: Sequence[pd.DataFrame]) -> tuple[float, float] | None:
-    """Return the overlap in measured minutes, calculated separately per signal."""
-    if not series or any(len(data.index) < 2 for data in series):
-        return None
-    start = float(max(data.index[0] for data in series) * 60)
-    end = float(min(data.index[-1] for data in series) * 60)
-    return (start, end) if start < end else None
+    """Return the time overlap between wells with at least two retained measurements."""
+    start, end = float("-inf"), float("inf")
+    for data in series:
+        for _, values in data.items():
+            times = values.dropna().index
+            if len(times) >= 2:
+                start = max(start, float(times[0]) * 60)
+                end = min(end, float(times[-1]) * 60)
+    return (start, end) if isfinite(start) and isfinite(end) and start < end else None
 
 
 def relative_auc_by_well(
@@ -79,10 +78,6 @@ def relative_auc_by_well(
     data = data.set_axis(data.index * 60, axis="index")
     auc = pd.Series(np.nan, index=data.columns, dtype=float)
     for well, values in data.items():
-        # An excluded measurement exactly at a boundary remains missing.
-        # Interpolate only if that time was not on this workbook's grid.
-        if any(bound in values.index and pd.isna(values.loc[bound]) for bound in window):
-            continue
         observed = values.dropna()
         if observed.empty or observed.index[0] > start or observed.index[-1] < end:
             continue
