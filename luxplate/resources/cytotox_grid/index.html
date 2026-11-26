@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root { color: var(--text, #262730); font: 14px system-ui, sans-serif; }
+    body { margin: 0; }
+    header { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; padding: .25rem 0 .6rem; }
+    button { font: inherit; cursor: pointer; }
+    header button {
+      border: 1px solid #8888; border-radius: .4rem; padding: .35rem .65rem;
+      color: inherit; background: transparent;
+    }
+    header button[aria-pressed="true"] { background: #8883; font-weight: 600; }
+    #validate { margin-left: auto; }
+    #summary { font-size: .875rem; }
+    #grid { max-height: 360px; overflow: auto; border: 1px solid #8888; }
+    table { border-spacing: 0; width: max-content; min-width: 100%; font-variant-numeric: tabular-nums; }
+    th, td { border: solid #8886; border-width: 0 1px 1px 0; text-align: right; }
+    th { padding: .3rem .5rem; color: var(--header-text, #262730); background: var(--header-bg, #f4f5f6); }
+    thead th { position: sticky; top: 0; z-index: 2; }
+    tr > th:first-child { position: sticky; left: 0; }
+    thead th:first-child { z-index: 3; }
+    td.empty { padding: .2rem .4rem; }
+    .value {
+      display: block; width: 100%; min-width: 5.5ch; padding: .2rem .4rem;
+      border: 0; color: #161616; text-align: right;
+    }
+    .value[aria-pressed="true"] {
+      box-shadow: inset 0 0 0 2px #172a57; background: #d7e3ff !important;
+      text-decoration: line-through; font-weight: 700;
+    }
+    .value:focus-visible { outline: 2px solid #172a57; outline-offset: -2px; }
+  </style>
+</head>
+<body>
+  <header>
+    <span id="signals" role="group" aria-label="Signal"></span>
+    <span id="summary" aria-live="polite"></span>
+    <button id="validate" type="button">Valider les exclusions</button>
+  </header>
+  <div id="grid" tabindex="0" aria-label="Mesures normalisées"></div>
+  <script>
+    const signals = document.querySelector("#signals");
+    const grid = document.querySelector("#grid");
+    const summary = document.querySelector("#summary");
+    const validate = document.querySelector("#validate");
+    const displayNumber = new Intl.NumberFormat("fr-FR", { maximumSignificantDigits: 6 });
+    let targetOrigin = "*";
+    let config;
+    let savedVersion;
+    let selected;
+    let active = 0;
+    let tables = [];
+
+    function send(type, props = {}) {
+      parent.postMessage({ isStreamlitMessage: true, type, ...props }, targetOrigin);
+    }
+
+    function resize() {
+      send("streamlit:setFrameHeight", { height: Math.ceil(document.body.getBoundingClientRect().height) + 2 });
+    }
+
+    function updateSummary() {
+      const count = selected.reduce((total, points) => total + points.size, 0);
+      summary.textContent = count === 1 ? "1 point coché" : `${count} points cochés`;
+    }
+
+    function renderTable() {
+      const { label, wells, times, keys, values, min, max } = tables[active];
+      const table = document.createElement("table");
+      table.setAttribute("aria-label", label);
+      const header = table.createTHead().insertRow();
+      for (const name of ["Temps (min)", ...wells]) {
+        const th = document.createElement("th");
+        th.scope = "col";
+        th.textContent = name;
+        header.append(th);
+      }
+      const body = table.createTBody();
+      for (const [rowIndex, readings] of values.entries()) {
+        const row = body.insertRow();
+        const elapsed = displayNumber.format(times[rowIndex]);
+        const th = document.createElement("th");
+        th.scope = "row";
+        th.textContent = elapsed;
+        row.append(th);
+        for (const [columnIndex, value] of readings.entries()) {
+          const cell = row.insertCell();
+          if (value === null) {
+            cell.textContent = "—";
+            cell.className = "empty";
+            continue;
+          }
+          const key = `${wells[columnIndex]}:${keys[rowIndex]}`;
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "value";
+          button.textContent = displayNumber.format(value);
+          button.title = String(value);
+          button.setAttribute("aria-label", `${wells[columnIndex]}, ${elapsed} min, valeur ${button.textContent}`);
+          button.setAttribute("aria-pressed", selected[active].has(key));
+          const ratio = max === min ? 0 : (value - min) / (max - min);
+          button.style.backgroundColor = `hsl(${116 * (1 - ratio)} 74% 68%)`;
+          button.addEventListener("click", () => {
+            const points = selected[active];
+            if (points.has(key)) points.delete(key);
+            else points.add(key);
+            button.setAttribute("aria-pressed", points.has(key));
+            updateSummary();
+          });
+          cell.append(button);
+        }
+      }
+      grid.replaceChildren(table);
+      updateSummary();
+      resize();
+    }
+
+    validate.addEventListener("click", () => {
+      send("streamlit:setComponentValue", {
+        dataType: "json",
+        value: { config, event: Date.now() + "-" + Math.random(), points: selected.map(points => [...points]) },
+      });
+    });
+
+    window.addEventListener("message", event => {
+      if (event.source !== parent || event.data?.type !== "streamlit:render") return;
+      targetOrigin = event.origin;
+      const { args, theme } = event.data;
+      const revision = JSON.stringify(args.excluded);
+      if (config === args.config && savedVersion === revision) return;
+      if (config !== args.config) active = 0;
+      config = args.config;
+      savedVersion = revision;
+      tables = args.tables;
+      selected = args.excluded.map(points => new Set(points));
+      const style = document.documentElement.style;
+      style.setProperty("--text", theme?.textColor ?? "#262730");
+      style.setProperty("--header-text", theme?.textColor ?? "#262730");
+      style.setProperty("--header-bg", theme?.secondaryBackgroundColor ?? "#f4f5f6");
+      signals.replaceChildren(...tables.map(({ label }, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.setAttribute("aria-pressed", index === active);
+        button.addEventListener("click", () => {
+          active = index;
+          [...signals.children].forEach((tab, tabIndex) => tab.setAttribute("aria-pressed", tabIndex === active));
+          renderTable();
+        });
+        return button;
+      }));
+      renderTable();
+    });
+
+    new ResizeObserver(resize).observe(document.body);
+    send("streamlit:componentReady", { apiVersion: 1 });
+  </script>
+</body>
+</html>

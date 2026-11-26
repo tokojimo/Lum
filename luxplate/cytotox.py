@@ -1,4 +1,4 @@
-"""Read the four-sheet Cytotox workbook without transforming its measurements."""
+"""Import Cytotox workbooks and prepare their normalized signals."""
 
 from dataclasses import dataclass
 from io import BytesIO
@@ -6,6 +6,7 @@ from math import isfinite
 import re
 from zipfile import BadZipFile
 
+import numpy as np
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
@@ -31,6 +32,18 @@ class CytotoxSignal:
 class CytotoxWorkbook:
     plate: pd.DataFrame
     signals: tuple[CytotoxSignal, ...]
+
+
+def normalize_ip(gfp: pd.DataFrame, ip: pd.DataFrame, end_minutes: float) -> pd.DataFrame:
+    """Calculate (IP(t) - IP(0)) / GFP(0) per well through the inclusive cutoff."""
+    if 0 not in gfp.index or 0 not in ip.index:
+        raise ValueError("Les feuilles GFP brut et IP brut doivent contenir une mesure à t = 0.")
+    end_hours = np.nextafter(end_minutes / 60, np.inf)
+    window = ip.loc[(ip.index >= 0) & (ip.index <= end_hours)]
+    gfp_zero = gfp.loc[0].reindex(ip.columns)
+    return window.sub(ip.loc[0], axis="columns").div(
+        gfp_zero.where(gfp_zero.ne(0)), axis="columns",
+    ).replace([np.inf, -np.inf], np.nan)
 
 
 def _read_plate(sheet) -> pd.DataFrame:
