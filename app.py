@@ -13,6 +13,7 @@ from luxplate.blanks import run_blank_correction
 from luxplate.auc_controls import (DRAFT_KEY, VALIDATED_KEY, auc_do_slider_bounds,
                                    initialize_auc_do_state, validate_auc_do_draft)
 from luxplate.crosstalk import correct_plate_crosstalk
+from luxplate.cytotox_ui import render_cytotox
 from luxplate.export import figure_bytes, package_figures
 from luxplate.display_order import reconcile_display_order
 from luxplate.figure_lifecycle import (filter_result_strains,
@@ -735,8 +736,10 @@ def render_guided_results(complete, base: str) -> None:
                     "image/svg+xml", key=f"guided_svg_{item.name}",
                 )
 
-st.title("LuxPlate Analyzer")
-st.caption("Du classeur Varioskan brut aux données contrôlées, analysées et visualisées.")
+lum_tab, cytotox_tab = st.tabs(["Lum", "Cytotox"])
+with lum_tab:
+    st.title("LuxPlate Analyzer")
+    st.caption("Du classeur Varioskan brut aux données contrôlées, analysées et visualisées.")
 
 with st.sidebar:
     st.header("💾 Projet")
@@ -772,7 +775,7 @@ with st.sidebar:
     else:
         st.info("Importez des données pour activer l'export du projet.")
 
-guided_tab = st.container()
+guided_tab = lum_tab.container()
 
 with guided_tab:
     st.header("Analyse guidée d'un classeur réel")
@@ -1246,3 +1249,6 @@ with guided_tab:
                         st.session_state["guided_complete_result"],
                         st.session_state.get("source_name", "analyse"),
                     )
+
+with cytotox_tab:
+    render_cytotox()
