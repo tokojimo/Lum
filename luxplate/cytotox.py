@@ -11,6 +11,7 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
+from .kinetics import calculate_auc
 from .varioskan import clean_text
 
 
@@ -44,6 +45,19 @@ def normalize_ip(gfp: pd.DataFrame, ip: pd.DataFrame, end_minutes: float) -> pd.
     return window.sub(ip.loc[0], axis="columns").div(
         gfp_zero.where(gfp_zero.ne(0)), axis="columns",
     ).replace([np.inf, -np.inf], np.nan)
+
+
+def ip_auc_by_well(ip: pd.DataFrame) -> pd.Series:
+    """Integrate filtered IP in minutes over the same measured interval for every well."""
+    auc = pd.Series(np.nan, index=ip.columns, dtype=float)
+    if len(ip.index) < 2:
+        return auc
+    # A missing endpoint would shorten the window for this well. Interior
+    # gaps are handled by the shared trapezoidal integration.
+    endpoints = ip.iloc[[0, -1]].notna().all()
+    for well in endpoints[endpoints].index:
+        auc.loc[well] = calculate_auc(ip.index * 60, ip[well])
+    return auc
 
 
 def _read_plate(sheet) -> pd.DataFrame:

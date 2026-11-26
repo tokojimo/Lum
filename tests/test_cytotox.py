@@ -4,9 +4,10 @@ from io import BytesIO
 
 import numpy as np
 from openpyxl import Workbook
+import pandas as pd
 import pytest
 
-from luxplate.cytotox import normalize_ip, read_cytotox_workbook
+from luxplate.cytotox import CytotoxSignal, ip_auc_by_well, normalize_ip, read_cytotox_workbook
 from luxplate.cytotox_ui import _signal_figure, _wells_by_strain
 
 
@@ -99,3 +100,23 @@ def test_ip_normalization_requires_time_zero_in_both_sheets(workbook):
     gfp, ip, _ = _read(workbook).signals
     with pytest.raises(ValueError, match="t = 0"):
         normalize_ip(gfp.data.drop(index=0), ip.data, 1200)
+
+
+def test_auc_uses_minutes_and_keeps_a_common_window_after_exclusions():
+    ip = pd.DataFrame(
+        {"A1": [0, 3, 4], "A2": [0, np.nan, 4], "A3": [0, 3, np.nan], "A4": [np.nan, 3, 4]},
+        index=[0, 0.5, 1],
+    )
+    auc = ip_auc_by_well(ip)
+    np.testing.assert_allclose(auc, [150, 120, np.nan, np.nan])
+    assert ip_auc_by_well(ip.iloc[[0]]).isna().all()
+
+
+def test_final_curve_averages_only_retained_wells():
+    data = pd.DataFrame({"A1": [2, np.nan, np.nan], "A2": [4, 5, np.nan]}, index=[0, .5, 1])
+    signal = CytotoxSignal("GFP normalisé", "GFP pour R", "GFP", data)
+    figure = _signal_figure(signal, {"Souche": ["A1", "A2"]}, "Courbe finale", mean_sd=True)
+    axis = figure.axes[0]
+    np.testing.assert_allclose(axis.lines[0].get_ydata(), [3, 5, np.nan])
+    band = axis.collections[0].get_paths()[0].vertices[:, 1]
+    np.testing.assert_allclose([band.min(), band.max()], [3 - np.sqrt(2), 3 + np.sqrt(2)])
